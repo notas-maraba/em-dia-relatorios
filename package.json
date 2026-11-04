@@ -1,0 +1,10 @@
+{
+  "name": "em-dia-relatorios",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Checklist local de relatórios mensais, com foco em celular e publicação estática no GitHub Pages.",
+  "scripts": {
+    "test": "node tests/core.test.cjs",
+    "check": "node --check assets/app.js && node --check assets/core.js && node --check assets/pdf.js"
+  }
+}

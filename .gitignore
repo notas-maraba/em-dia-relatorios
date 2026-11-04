@@ -1,0 +1,25 @@
+# Dados privados e arquivos exportados: nunca enviar ao repositório.
+backup*.json
+**/backup*.json
+em-dia-backup*.json
+recuperacao-*.txt
+backups/
+dados-pessoais/
+*.pdf
+*.xlsx
+*.xls
+sistema-relatorios-mensais-v*.html
+*pessoal*.html
+.env
+.env.*
+*.pem
+*.key
+
+# Desenvolvimento e arquivos locais.
+node_modules/
+__pycache__/
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/
