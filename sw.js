@@ -1,26 +1,26 @@
-/* Em dia 3.1.0: cache only this explicit public application shell. */
+/* Em dia 3.1.1: cache only this explicit public application shell. */
 'use strict';
-const RELEASE = '3.1.0';
+const RELEASE = '3.1.1';
 const BASE = new URL('./', self.location.href);
 const CACHE_PREFIX = 'em-dia-public-shell-' + encodeURIComponent(BASE.pathname) + '-';
 const CACHE_NAME = CACHE_PREFIX + RELEASE;
 const SHELL = [
   './',
   './index.html',
-  './assets/app.css?v=3.1.0',
+  './assets/app.css?v=3.1.1',
   './assets/core.js',
   './assets/pdf.js',
   './assets/vendor/supabase.js',
-  './assets/config.js?v=3.1.0',
-  './assets/cloud.js?v=3.1.0',
-  './assets/app.js?v=3.1.0',
-  './assets/install.js?v=3.1.0',
+  './assets/config.js?v=3.1.1',
+  './assets/cloud.js?v=3.1.1',
+  './assets/app.js?v=3.1.1',
+  './assets/install.js?v=3.1.1',
   './manifest.webmanifest',
-  './assets/icons/icon.svg',
-  './assets/icons/icon-192.png',
-  './assets/icons/icon-512.png',
-  './assets/icons/icon-maskable-512.png',
-  './assets/icons/apple-touch-icon.png'
+  './assets/icons/relatorios-32-v311.png',
+  './assets/icons/relatorios-192-v311.png',
+  './assets/icons/relatorios-512-v311.png',
+  './assets/icons/relatorios-maskable-512-v311.png',
+  './assets/icons/apple-touch-icon-v311.png'
 ].map(file => new URL(file, BASE).href);
 const ALLOWED = new Set(SHELL);
 const NAVIGATION = new Set([BASE.href, new URL('index.html', BASE).href]);
