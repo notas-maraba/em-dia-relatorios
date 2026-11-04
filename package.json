@@ -1,11 +1,11 @@
 {
   "name": "em-dia-relatorios",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "Relatórios mensais com autenticação Supabase e armazenamento privado na nuvem.",
+  "description": "Relatorios por grupo com usuarios autorizados e administracao privada no Supabase.",
   "scripts": {
-    "test": "node tests/core.test.cjs && node tests/cloud.test.cjs && node tests/app.test.cjs",
-    "check": "node --check assets/app.js && node --check assets/core.js && node --check assets/pdf.js && node --check assets/cloud.js && node --check assets/config.js"
+    "test": "node tests/core.test.cjs && node tests/cloud.test.cjs && node tests/app.test.cjs && node tests/admin-users.test.cjs",
+    "check": "node --check assets/app.js && node --check assets/core.js && node --check assets/pdf.js && node --check assets/cloud.js && node --check assets/config.js && node --check supabase/functions/em-dia-users/handler.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "2.119.0"
