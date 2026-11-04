@@ -17,3 +17,9 @@ Nunca envie backups, HTML pessoal, relatórios, capturas com dados reais ou arqu
 Faça login, selecione o grupo e use Dados → Importar backup. Exporte uma cópia antes de substituir uma base existente. A importação grava apenas no grupo selecionado, fora do GitHub. Recarregue e confira os registros.
 
 Em atualizações, preserve a base e as contas. Não reaplique a criação do schema; use migrações revisadas.
+
+## Instalação no celular
+
+Publique também manifest.webmanifest, sw.js, assets/install.js e assets/icons/. A instalação usa HTTPS no endereço público e abre em janela de aplicativo. Não precisa de uma loja de aplicativos.
+
+Em cada nova versão, atualize RELEASE em sw.js, os arquivos públicos da lista SHELL e as versões dos assets em index.html. Não reutilize a versão do cache após mudar arquivos. O worker novo aguarda as abas antigas fecharem, para não interromper formulários abertos. Não adicione respostas do Supabase, callbacks de login, backups ou outros dados pessoais ao cache.

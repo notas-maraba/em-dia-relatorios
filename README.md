@@ -12,6 +12,10 @@ Dados da versão local anterior não são importados nem apagados silenciosament
 
 O site funciona no GitHub Pages, branch main, pasta / (root), com .nojekyll. Não há compilação. O SDK Supabase está incluído em assets/vendor, com versão exata, licença e dependências fixadas no lockfile.
 
+A versão 3.1 mantém a apresentação de celular em todas as telas: cartões em duas colunas, listas em uma coluna, navegação inferior e formulários em painel inferior. Grupos, usuários e regras de acesso permanecem disponíveis.
+
+Em Dados, na tela de entrada ou em Ajuda, use “Instalar no celular”. Navegadores compatíveis mostram a confirmação de instalação; no iPhone, siga as instruções para adicionar pelo Safari à Tela de Início. A instalação continua exigindo login e internet para consultar ou salvar relatórios. O serviço de cache guarda somente uma lista explícita de arquivos públicos do aplicativo, sem respostas de autenticação, contas, relatórios, backups ou consultas do Supabase.
+
 assets/config.js contém somente URL, chave pública publishable e retorno de login. Senhas, chaves secretas, e-mails, IDs reais dos responsáveis e backups não pertencem ao código público. supabase/schema.sql documenta a estrutura inicial e supabase/groups-upgrade.sql adapta uma instalação existente por grupos, sem incluir identidades pessoais.
 
 A aba Usuários é exclusiva da administração. Ao cadastrar uma conta, escolha um grupo existente ou crie um novo. Contas existentes podem ser vinculadas ou movidas sem apagar os relatórios do grupo. A função de servidor em-dia-users verifica o usuário e sua permissão de administrador antes de usar a API privada de autenticação. Chaves de servidor ficam somente nas variáveis protegidas do Supabase.
