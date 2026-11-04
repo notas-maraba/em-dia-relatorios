@@ -163,3 +163,16 @@ test('a rejected native share cannot fall back to copying records for a differen
   assert.equal(copies,0);assert.equal(h.element('#modal').innerHTML,'');
   assert.equal(h.window.EmDiaApp.getState().people.length,0);
 });
+test('a rejected background read preserves a settings draft started while the request was pending',async()=>{
+  const read=deferred();let reads=0;
+  const h=harness({read:async()=>++reads===1?{state:fixture(),revision:7}:read.promise});await flush();
+  h.click('tab','data');h.focus();await flush();assert.equal(reads,2);
+  const shown=h.element('#app').innerHTML;h.element('#congregation').value='Rascunho ainda não salvo';h.input('#settings-form');
+  read.reject(new errors.CloudError('Network unavailable'));await flush();
+  assert.equal(h.element('#app').innerHTML,shown);
+  assert.equal(h.element('#congregation').value,'Rascunho ainda não salvo');
+  assert.equal(h.window.EmDiaApp.getState().settings.congregation,'');
+  assert.equal(h.window.EmDiaApp.getCloudStatus().revision,7);
+  assert.equal(h.window.EmDiaApp.getCloudStatus().blocked,true);
+  assert.equal(h.window.EmDiaApp.getCloudStatus().loading,false);
+});
