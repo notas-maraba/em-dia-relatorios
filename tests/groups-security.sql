@@ -221,6 +221,30 @@ begin
   assert (select state=v_b_before.state and revision=v_b_before.revision
     from public.em_dia_states where group_id=v_gb.id),'Legacy JSON was redirected into the newly assigned group';
   reset role;
+
+  -- Removing the administrative flag after a move must not turn the private
+  -- legacy route into an authorization bypass. The old form is now denied;
+  -- the current group can still be saved through the explicit group API.
+  update public.em_dia_members set is_admin=false where user_id=v_admin;
+  set local role authenticated;
+  assert not em_dia_private.is_admin();
+  assert (select count(*)=1 from public.em_dia_groups);
+  assert (select count(*)=0 from public.em_dia_states where group_id=v_legacy);
+  v_denied:=false;
+  begin perform public.save_em_dia_state(v_original.state,v_original.revision+1);
+  exception when insufficient_privilege then v_denied:=true; end;
+  assert v_denied,'A moved former administrator used the legacy mapping to bypass group access';
+  v_denied:=false;
+  begin perform public.save_em_dia_group_state(v_legacy,v_original.state,v_original.revision+1);
+  exception when insufficient_privilege then v_denied:=true; end;
+  assert v_denied,'A moved former administrator explicitly saved the old group';
+  select * into v_result from public.save_em_dia_group_state(v_gb.id,v_state,v_b_before.revision);
+  assert v_result.group_id=v_gb.id and v_result.revision=v_b_before.revision+1;
+  reset role;
+  assert (select revision=v_original.revision+1 and state->'people'=v_original.state->'people'
+    and state->'reports'=v_original.state->'reports'
+    from public.em_dia_states where group_id=v_legacy),
+    'A former administrator changed the original group after losing access';
 end;
 $$;
 
