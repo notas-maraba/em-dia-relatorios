@@ -1,25 +1,9 @@
-# Verificação do pacote para GitHub Pages
+# Verificação
 
-Data: 4 de novembro de 2026.
+npm run check confere sintaxe. npm test executa regras de negócio e PDF, cliente de nuvem e ciclo de autenticação/gravação da interface com dados fictícios.
 
-## Executado neste preparo
+Os testes conferem sessão verificada, autorização, base vazia, falhas de rede, conflitos e ausência de repetição automática de gravação. A interface deve ocultar dados antes do login, confirmar alterações só após resposta do banco e limpar a tela ao sair.
 
-- 47 testes automatizados de regras e de geração de PDF aprovados com Node.js 22.16.0, usando dados fictícios.
-- Verificação sintática dos três arquivos JavaScript com `node --check`.
-- Conferência das referências de scripts e estilos do `index.html`: todos os arquivos existem no pacote e os caminhos são relativos.
-- Comparação dos arquivos de execução com a distribuição limpa anterior: interface e lógica mantidas sem alterações.
-- Conferência de que não há estado inicial pessoal embutido no HTML.
-- Conferência de que nomes dos cadastros do backup pessoal não estão presentes nos arquivos do pacote. O backup foi usado somente como referência de verificação local; não foi incluído no pacote.
+tests/security.sql simula papéis JWT dentro de uma transação com rollback no projeto dedicado. Verifica visitante, conta não autorizada, tentativa de autoautorização, isolamento do dono, gravação direta negada e revisão obsoleta recusada. Nenhum registro fictício deve permanecer.
 
-Para repetir os testes:
-
-```sh
-npm test
-npm run check
-```
-
-## Escopo e limites
-
-A preparação do pacote não criou repositório nem publicação remota. Não foi realizada uma nova sessão de testes visuais ou de persistência em navegador neste preparo. A aprovação dos testes de lógica não certifica todos os navegadores, aparelhos físicos, diálogos de compartilhamento ou downloads.
-
-Antes do uso definitivo, confira no endereço publicado e no seu próprio dispositivo: salvar e reabrir registros, exportar e restaurar backups, baixar e abrir os PDFs, e navegar nas quatro abas em tela pequena.
+Antes de liberar, confira no navegador login, saída, recarga, abas, cadastro, relatórios, PDF, backup e dados importados. Confira tela pequena e segunda sessão. Testes de módulos não substituem essas verificações. Não altere dados reais apenas para testar nem publique evidências com nomes reais.

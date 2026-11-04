@@ -1,10 +1,13 @@
 {
   "name": "em-dia-relatorios",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Checklist local de relatórios mensais, com foco em celular e publicação estática no GitHub Pages.",
+  "description": "Relatórios mensais com autenticação Supabase e armazenamento privado na nuvem.",
   "scripts": {
-    "test": "node tests/core.test.cjs",
-    "check": "node --check assets/app.js && node --check assets/core.js && node --check assets/pdf.js"
+    "test": "node tests/core.test.cjs && node tests/cloud.test.cjs && node tests/app.test.cjs",
+    "check": "node --check assets/app.js && node --check assets/core.js && node --check assets/pdf.js && node --check assets/cloud.js && node --check assets/config.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.119.0"
   }
 }

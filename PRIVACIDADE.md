@@ -1,29 +1,15 @@
-# Dados e limites de privacidade
+# Privacidade e acesso
 
-## O que este pacote contém
+O código é público. Cadastros, relatórios, observações e backups não integram o repositório nem arquivos públicos de inicialização.
 
-Somente código, documentação e testes com dados fictícios. Não contém os nomes, relatórios reais, arquivos pessoais ou backups do usuário.
+Supabase Auth verifica o login. Uma lista privada de responsáveis e regras de segurança por linha restringem a leitura à própria base. Visitantes e contas não autorizadas não recebem os registros. Gravações usam função com revisão atômica; o navegador não pode escrever diretamente nas tabelas.
 
-## O que é armazenado
+A chave publishable e a URL são identificadores públicos. Não dão acesso aos dados por si só. Nunca publique senha, chave secreta ou service_role.
 
-Os cadastros de publicadores, períodos de pioneiro, relatórios, lembretes registrados e configurações ficam no armazenamento local do navegador. O aplicativo não inclui serviços de analytics, fontes remotas ou requisições de envio desses registros.
+A comunicação usa HTTPS. O SDK persiste a sessão do usuário no navegador. Use aparelhos confiáveis e saia da conta em aparelhos compartilhados. Sair remove os dados da interface; proteja separadamente arquivos JSON e PDF já baixados.
 
-O download do site pelo GitHub Pages envolve normalmente a infraestrutura de hospedagem; a ausência de envio dos relatórios pelo aplicativo não significa ausência de registros técnicos de acesso na hospedagem.
+Em conflito ou falha de rede, confira o estado remoto antes de repetir uma gravação: uma requisição pode ter sido aceita antes da conexão cair. Não há mesclagem automática de duas edições.
 
-## Limites importantes
+Importar substitui a base inteira da conta. Preserve um backup anterior. O aplicativo não apaga nem importa automaticamente o armazenamento da versão local antiga. O plano Free pode ter pausas e limites; mantenha backups privados externos.
 
-- Não há autenticação, criptografia dos registros ou controle individual de permissões.
-- Não há sincronização entre aparelhos e nem backup automático remoto.
-- Quem utiliza o mesmo perfil de navegador pode ter acesso aos registros.
-- Limpeza de dados do navegador, perda do aparelho ou falhas de armazenamento podem causar perda de registros.
-- O armazenamento local é separado por origem, não por caminho da URL. Outros aplicativos publicados na mesma origem do GitHub Pages podem compartilhar o acesso técnico ao armazenamento. Utilize apenas código confiável nessa origem.
-- A orientação `noindex` presente no HTML não é uma barreira de acesso nem uma garantia de sigilo.
-- O arquivo `.gitignore` não protege um arquivo que você enviar deliberadamente pelo navegador, nem remove um arquivo já publicado.
-
-## Procedimento recomendado
-
-Use um aparelho e perfil de navegador sob seu controle. Exporte backups com regularidade e guarde-os em local privado. Não coloque HTML pessoal, JSON de backup, PDFs ou imagens com relatórios no repositório público.
-
-Para migrar para o site publicado, importe o backup dentro da aba **Dados** do aplicativo. Esse processo lê o arquivo localmente; não envia o JSON ao GitHub. A importação substitui a base atual, então preserve uma cópia antes de confirmar.
-
-Para uso simultâneo por várias pessoas, com base compartilhada, esta versão precisará de autenticação, regras de acesso e backend apropriados. Hospedar no Pages, por si só, não acrescenta essas funcionalidades.
+Referências: [segurança](https://supabase.com/docs/guides/database/secure-data), [RLS](https://supabase.com/docs/guides/database/postgres/row-level-security), [sessões](https://supabase.com/docs/guides/auth/sessions).
