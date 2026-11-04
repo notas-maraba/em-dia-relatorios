@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const ROOT = path.resolve(__dirname, '..');
 const SITE = 'https://notas-maraba.github.io/em-dia-relatorios/';
 const source = file => fs.readFileSync(path.join(ROOT, file), 'utf8');
+const VERSION = JSON.parse(source('package.json')).version;
 
 function worker() {
   const listeners = {}, stores = new Map(), requests = [], deleted = [], fetched = [];
@@ -64,8 +65,13 @@ test('manifest resolves inside the GitHub Pages folder and uses real install ico
     assert.equal(png.readUInt32BE(16), width); assert.equal(png.readUInt32BE(20), height);
     assert.ok(['any', 'maskable'].includes(icon.purpose));
   }
-  const apple = fs.readFileSync(path.join(ROOT, 'assets/icons/apple-touch-icon.png'));
+  const html = source('index.html');
+  const applePath = html.match(/<link rel="apple-touch-icon" href="([^"]+)"/)[1];
+  const apple = fs.readFileSync(path.join(ROOT, applePath));
   assert.equal(apple.readUInt32BE(16), 180); assert.equal(apple.readUInt32BE(20), 180);
+  const faviconPath = html.match(/<link rel="icon" href="([^"]+)" type="image\/png" sizes="32x32"/)[1];
+  const favicon = fs.readFileSync(path.join(ROOT, faviconPath));
+  assert.equal(favicon.readUInt32BE(16), 32); assert.equal(favicon.readUInt32BE(20), 32);
   assert.ok(manifest.icons.some(icon => icon.sizes === '192x192' && icon.purpose === 'any'));
   assert.ok(manifest.icons.some(icon => icon.sizes === '512x512' && icon.purpose === 'maskable'));
 });
@@ -73,6 +79,11 @@ test('manifest resolves inside the GitHub Pages folder and uses real install ico
 test('service worker installation fetches only exact static public assets without credentials', async () => {
   const w = worker(); await w.lifecycle('install');
   assert.equal(w.requests.length, 16); assert.equal(new Set(w.requests.map(r => r.url)).size, 16);
+  assert.ok([...w.stores.keys()][0].endsWith(VERSION), 'The shell cache must use the package release');
+  const manifest = JSON.parse(source('manifest.webmanifest')), html = source('index.html');
+  const iconPaths = manifest.icons.map(icon => new URL(icon.src, SITE).href);
+  for (const rel of ['icon', 'apple-touch-icon']) iconPaths.push(new URL(html.match(new RegExp('<link rel="' + rel + '" href="([^"]+)"'))[1], SITE).href);
+  assert.deepEqual(w.requests.map(request => request.url).filter(url => url.includes('/assets/icons/')).sort(), iconPaths.sort(), 'Precache must use only the current manifest and head icons');
   for (const request of w.requests) {
     assert.equal(new URL(request.url).origin, new URL(SITE).origin);
     assert.ok(request.url.startsWith(SITE)); assert.equal(request.credentials, 'omit'); assert.equal(request.cache, 'reload'); assert.equal(request.mode, 'same-origin'); assert.equal(request.redirect, 'error');
@@ -85,7 +96,7 @@ test('service worker installation fetches only exact static public assets withou
 
 test('activation removes only obsolete public caches for this application scope', async () => {
   const w = worker(); await w.lifecycle('install');
-  const current = [...w.stores.keys()][0], prefix = current.slice(0, -'3.1.0'.length);
+  const current = [...w.stores.keys()][0], prefix = current.slice(0, -VERSION.length);
   w.stores.set(prefix + '3.0.0', new Map()); w.stores.set('another-app', new Map()); w.stores.set('em-dia-public-shell-%2Fother-app%2F-3.0.0', new Map());
   await w.lifecycle('activate');
   assert.deepEqual(w.deleted, [prefix + '3.0.0']); assert.ok(w.stores.has(current)); assert.ok(w.stores.has('another-app')); assert.equal(w.claims, 1);
@@ -98,7 +109,7 @@ test('Auth, cloud data, unknown JSON, callback queries and mutations are never i
     ['https://database.example.invalid/auth/v1/token', 'POST'],
     ['https://database.example.invalid/functions/v1/em-dia-users', 'POST'],
     [SITE + 'private.json', 'GET'], [SITE + 'backup.json', 'GET'], [SITE + '?code=private-code', 'GET'],
-    [SITE + 'assets/app.js?v=3.1.0&access_token=private-token', 'GET'], [SITE + 'assets/app.js?v=3.1.0', 'POST'],
+    [SITE + 'assets/app.js?v=' + VERSION + '&access_token=private-token', 'GET'], [SITE + 'assets/app.js?v=' + VERSION, 'POST'],
     [SITE + '../other-app/index.html', 'GET']
   ]) assert.equal((await w.request(url, method)).handled, false, url);
   assert.equal(w.fetched.length, 0);
@@ -109,7 +120,7 @@ test('offline fallback supplies only the public shell and never creates runtime 
   const store = [...w.stores.values()][0], originalKeys = [...store.keys()];
   const fresh = await w.request(SITE, 'GET', 'navigate'); assert.equal(await fresh.response.text(), 'CURRENT PUBLIC HTML');
   w.failNetwork(); const offline = await w.request(SITE, 'GET', 'navigate'); assert.match(await offline.response.text(), /^PUBLIC /);
-  const script = await w.request(SITE + 'assets/app.js?v=3.1.0'); assert.match(await script.response.text(), /^PUBLIC /);
+  const script = await w.request(SITE + 'assets/app.js?v=' + VERSION); assert.match(await script.response.text(), /^PUBLIC /);
   assert.deepEqual([...store.keys()], originalKeys);
 });
 
