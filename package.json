@@ -1,6 +1,6 @@
 {
   "name": "em-dia-relatorios",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "private": true,
   "description": "Relatorios por grupo com usuarios autorizados e administracao privada no Supabase.",
   "scripts": {
