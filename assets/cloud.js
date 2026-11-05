@@ -96,6 +96,13 @@
     return value;
   }
 
+  function checkedLaunchId(value) {
+    if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+      throw new CloudError('Escolha um lançamento válido antes de continuar.', 'invalid_launch');
+    }
+    return value.toLowerCase();
+  }
+
   function monthMinutes(month) {
     return new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate() * 1440;
   }
@@ -123,6 +130,32 @@
         entries: Object.fromEntries(entries), version, totalMinutes: row.total_minutes, closed: row.closed,
         today, updatedAt: row.updated_at};
     } catch (_) { throw new CloudError('A nuvem retornou um diário inválido. Recarregue seu cartão.', 'invalid_response'); }
+  }
+
+  function ownHourLaunchesResult(row, current, month) {
+    const diary = ownHoursResult(row, current, month);
+    try {
+      if (!Array.isArray(row.launches) || row.launches.length > 1000 || JSON.stringify(row.launches).length > 262144) {
+        throw new Error('Invalid launches');
+      }
+      const ids = new Set(), daily = Object.create(null);
+      const launches = row.launches.map(item => {
+        if (!stateObject(item)) throw new Error('Invalid launch');
+        const id = checkedLaunchId(item.id), date = checkedDate(item.date), minutes = item.minutes;
+        if (ids.has(id) || date.slice(0, 7) !== month || date > diary.today ||
+            !Number.isSafeInteger(minutes) || minutes < 0 || minutes > 1440) throw new Error('Invalid launch');
+        ids.add(id);
+        daily[date] = (daily[date] || 0) + minutes;
+        if (daily[date] > 1440) throw new Error('Invalid daily sum');
+        return {id, date, minutes};
+      });
+      const dates = Object.keys(daily);
+      if (dates.length !== Object.keys(diary.entries).length ||
+          dates.some(date => !Object.hasOwn(diary.entries, date) || diary.entries[date] !== daily[date])) {
+        throw new Error('Invalid daily aggregate');
+      }
+      return {...diary, launches};
+    } catch (_) { throw new CloudError('A nuvem retornou lançamentos inválidos. Recarregue seu diário.', 'invalid_response'); }
   }
 
   function checkedVersion(value, minimum = 0) {
@@ -324,9 +357,9 @@
       try {
         const current = await profile();
         if (current.role !== 'publisher') throw new AccessDeniedError();
-        const result = await client.rpc('read_em_dia_own_hours', {p_month: selectedMonth});
+        const result = await client.rpc('read_em_dia_own_hour_launches', {p_month: selectedMonth});
         if (result.error) throw result.error;
-        return ownHoursResult(objectResult(result.data), current, selectedMonth);
+        return ownHourLaunchesResult(objectResult(result.data), current, selectedMonth);
       } catch (error) { throw mappedError(error); }
     }
 
@@ -343,6 +376,29 @@
         const row = objectResult(result.data), saved = ownHoursResult(row, current, selectedDate.slice(0, 7));
         if (!['regular', 'auxiliary'].includes(saved.kind) || typeof row.unchanged !== 'boolean' ||
             (minutes === null ? Object.hasOwn(saved.entries, selectedDate) : saved.entries[selectedDate] !== minutes) ||
+            (row.unchanged ? saved.version < version : saved.version !== version + 1)) {
+          throw new CloudError('Não foi possível confirmar o lançamento. Recarregue o diário antes de tentar novamente.', 'invalid_response');
+        }
+        return {...saved, unchanged: row.unchanged};
+      } catch (error) { throw mappedError(error, true); }
+    }
+
+    async function saveOwnHoursLaunch({id, date, minutes, expectedVersion} = {}) {
+      const launchId = checkedLaunchId(id), selectedDate = checkedDate(date), version = checkedVersion(expectedVersion);
+      if (!(minutes === null || Number.isSafeInteger(minutes) && minutes >= 0 && minutes <= 1440)) {
+        throw new CloudError('Informe de 0 a 24 horas para este lançamento.', 'invalid_minutes');
+      }
+      try {
+        const current = await profile();
+        if (current.role !== 'publisher') throw new AccessDeniedError();
+        const result = await client.rpc('save_em_dia_own_hour_launch', {
+          p_id: launchId, p_date: selectedDate, p_minutes: minutes, p_expected_version: version
+        });
+        if (result.error) throw result.error;
+        const row = objectResult(result.data), saved = ownHourLaunchesResult(row, current, selectedDate.slice(0, 7));
+        const launch = saved.launches.find(item => item.id === launchId);
+        if (!['regular', 'auxiliary'].includes(saved.kind) || typeof row.unchanged !== 'boolean' || selectedDate > saved.today ||
+            (minutes === null ? !!launch : !launch || launch.date !== selectedDate || launch.minutes !== minutes) ||
             (row.unchanged ? saved.version < version : saved.version !== version + 1)) {
           throw new CloudError('Não foi possível confirmar o lançamento. Recarregue o diário antes de tentar novamente.', 'invalid_response');
         }
@@ -590,7 +646,7 @@
       };
     }
 
-    return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, submitOwnReport, readOwnHours, saveOwnHours, submitOwnHours, listRevisions, reviewRevision,
+    return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, submitOwnReport, readOwnHours, saveOwnHours, saveOwnHoursLaunch, submitOwnHours, listRevisions, reviewRevision,
       transferGroups, transferPublisher, publisherAccounts, listUsers, createUser, assignUser, createPublisherUser,
       login, loginPassword, logout, session, subscribeAuth});
   }
