@@ -88,6 +88,43 @@
     return value;
   }
 
+  function checkedDate(value) {
+    if (typeof value !== 'string' || !/^(19|20|21)\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value) ||
+        new Date(Date.UTC(Number(value.slice(0, 4)), Number(value.slice(5, 7)) - 1, Number(value.slice(8)))).toISOString().slice(0, 10) !== value) {
+      throw new CloudError('Escolha uma data válida para o lançamento.', 'invalid_date');
+    }
+    return value;
+  }
+
+  function monthMinutes(month) {
+    return new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate() * 1440;
+  }
+
+  function responseVersion(value, minimum = 0) {
+    if (!(typeof value === 'number' || typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value))) {
+      throw new CloudError('A nuvem retornou uma versão inválida.', 'invalid_response');
+    }
+    try { return checkedVersion(Number(value), minimum); }
+    catch (_) { throw new CloudError('A nuvem retornou uma versão inválida.', 'invalid_response'); }
+  }
+
+  function ownHoursResult(row, current, month) {
+    try {
+      if (row.group_id !== current.defaultGroupId || row.person_id !== current.publisherId || row.month !== month ||
+          !['publisher', 'regular', 'auxiliary'].includes(row.kind) || !stateObject(row.entries) ||
+          typeof row.closed !== 'boolean' || !Number.isSafeInteger(row.total_minutes) || row.total_minutes < 0 ||
+          row.total_minutes > monthMinutes(month) || !(row.updated_at === null || typeof row.updated_at === 'string')) throw new Error('Invalid diary');
+      const today = checkedDate(row.today), entries = Object.entries(row.entries), version = responseVersion(row.version);
+      if (month > today.slice(0, 7) || row.closed !== (month < today.slice(0, 7)) || entries.length > 31 ||
+          version === 0 && entries.length || entries.some(([date, minutes]) => checkedDate(date).slice(0, 7) !== month || date > today ||
+            !Number.isSafeInteger(minutes) || minutes < 0 || minutes > 1440) ||
+          entries.reduce((total, [, minutes]) => total + minutes, 0) !== row.total_minutes) throw new Error('Invalid diary');
+      return {groupId: row.group_id, personId: row.person_id, month, kind: row.kind,
+        entries: Object.fromEntries(entries), version, totalMinutes: row.total_minutes, closed: row.closed,
+        today, updatedAt: row.updated_at};
+    } catch (_) { throw new CloudError('A nuvem retornou um diário inválido. Recarregue seu cartão.', 'invalid_response'); }
+  }
+
   function checkedVersion(value, minimum = 0) {
     if (!Number.isSafeInteger(value) || value < minimum || value >= Number.MAX_SAFE_INTEGER) {
       throw new CloudError('Recarregue os dados antes de continuar.', 'invalid_revision');
@@ -279,6 +316,62 @@
         if (savedVersion === 0 && !(row.status === 'accepted' && row.unchanged)) throw new CloudError('Não foi possível confirmar a versão do envio.', 'invalid_response');
         return {status: row.status, version: savedVersion, groupId: row.group_id, personId: row.person_id,
           month: row.month, revision: checkedVersion(Number(row.revision), 1), unchanged: row.unchanged};
+      } catch (error) { throw mappedError(error, true); }
+    }
+
+    async function readOwnHours(month) {
+      const selectedMonth = checkedMonth(month);
+      try {
+        const current = await profile();
+        if (current.role !== 'publisher') throw new AccessDeniedError();
+        const result = await client.rpc('read_em_dia_own_hours', {p_month: selectedMonth});
+        if (result.error) throw result.error;
+        return ownHoursResult(objectResult(result.data), current, selectedMonth);
+      } catch (error) { throw mappedError(error); }
+    }
+
+    async function saveOwnHours({date, minutes, expectedVersion} = {}) {
+      const selectedDate = checkedDate(date), version = checkedVersion(expectedVersion);
+      if (!(minutes === null || Number.isSafeInteger(minutes) && minutes >= 0 && minutes <= 1440)) {
+        throw new CloudError('Informe um total de 0 a 24 horas para este dia.', 'invalid_minutes');
+      }
+      try {
+        const current = await profile();
+        if (current.role !== 'publisher') throw new AccessDeniedError();
+        const result = await client.rpc('save_em_dia_own_hours', {p_date: selectedDate, p_minutes: minutes, p_expected_version: version});
+        if (result.error) throw result.error;
+        const row = objectResult(result.data), saved = ownHoursResult(row, current, selectedDate.slice(0, 7));
+        if (!['regular', 'auxiliary'].includes(saved.kind) || typeof row.unchanged !== 'boolean' ||
+            (minutes === null ? Object.hasOwn(saved.entries, selectedDate) : saved.entries[selectedDate] !== minutes) ||
+            (row.unchanged ? saved.version < version : saved.version !== version + 1)) {
+          throw new CloudError('Não foi possível confirmar o lançamento. Recarregue o diário antes de tentar novamente.', 'invalid_response');
+        }
+        return {...saved, unchanged: row.unchanged};
+      } catch (error) { throw mappedError(error, true); }
+    }
+
+    async function submitOwnHours({month, participated, studies, expectedHoursVersion, expectedReportVersion} = {}) {
+      const selectedMonth = checkedMonth(month), hoursVersion = checkedVersion(expectedHoursVersion, 1), reportVersion = checkedVersion(expectedReportVersion);
+      if (!(participated === null || typeof participated === 'boolean') ||
+          !(studies === null || Number.isSafeInteger(studies) && studies >= 0 && studies <= 9999)) {
+        throw new CloudError('Confira a participação e os estudos informados.', 'invalid_report');
+      }
+      try {
+        const current = await profile();
+        if (current.role !== 'publisher') throw new AccessDeniedError();
+        const result = await client.rpc('submit_em_dia_own_hours', {p_month: selectedMonth, p_participated: participated,
+          p_studies: studies, p_expected_hours_version: hoursVersion, p_expected_report_version: reportVersion});
+        if (result.error) throw result.error;
+        const row = objectResult(result.data), savedVersion = responseVersion(row.version), savedHoursVersion = responseVersion(row.hours_version, 1);
+        if (!['accepted', 'pending'].includes(row.status) || row.group_id !== current.defaultGroupId || row.person_id !== current.publisherId ||
+            row.month !== selectedMonth || typeof row.unchanged !== 'boolean' || savedHoursVersion !== hoursVersion ||
+            !Number.isSafeInteger(row.total_minutes) || row.total_minutes < 0 || row.total_minutes > monthMinutes(selectedMonth) ||
+            (savedVersion === 0 && !(row.status === 'accepted' && row.unchanged)) ||
+            (!row.unchanged && savedVersion !== reportVersion + 1)) {
+          throw new CloudError('Não foi possível confirmar o envio do mês. Recarregue seu cartão antes de tentar novamente.', 'invalid_response');
+        }
+        return {status: row.status, version: savedVersion, groupId: row.group_id, personId: row.person_id, month: row.month,
+          revision: responseVersion(row.revision, 1), unchanged: row.unchanged, hoursVersion: savedHoursVersion, totalMinutes: row.total_minutes};
       } catch (error) { throw mappedError(error, true); }
     }
 
@@ -497,7 +590,7 @@
       };
     }
 
-    return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, submitOwnReport, listRevisions, reviewRevision,
+    return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, submitOwnReport, readOwnHours, saveOwnHours, submitOwnHours, listRevisions, reviewRevision,
       transferGroups, transferPublisher, publisherAccounts, listUsers, createUser, assignUser, createPublisherUser,
       login, loginPassword, logout, session, subscribeAuth});
   }

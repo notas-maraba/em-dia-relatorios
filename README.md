@@ -8,6 +8,10 @@ Ao entrar, o responsável vê o checklist do grupo vinculado à conta; o publica
 
 O primeiro relatório enviado pelo publicador é recebido automaticamente. Se mudar um relatório já recebido, o reenvio aguarda decisão em Revisões: o responsável compara o recebido com a proposta e aceita ou ignora. Até a aceitação, o relatório recebido permanece válido. Cada envio e decisão verifica a versão para evitar que uma resposta atrasada sobrescreva outra edição. Participação, horas e estudos são os únicos campos enviados pelo publicador; a condição de pioneiro vem do cadastro e do histórico administrado pelo responsável.
 
+Nos meses de pioneiro regular ou auxiliar, Meu cartão também oferece um diário de horas. O publicador registra horas e minutos em cada dia, edita os lançamentos e acompanha a soma do mês. Os lançamentos são salvos na nuvem e só aparecem para o acesso vinculado àquele cartão. Eles não são relatórios entregues e não alteram o total já recebido.
+
+Após encerrar o mês, o publicador pode conferir a soma, informar os estudos bíblicos e enviar o relatório. O banco calcula o total a partir dos minutos salvos, conferindo as versões do diário e do relatório. A conversão para o relatório usa horas decimais com duas casas; por exemplo, 1h30 corresponde a 1,5h. Reenvios seguem a mesma aprovação pelo responsável. A opção de informar um total mensal manualmente continua disponível para meses encerrados e não modifica o diário. Totais recebidos antes da criação do diário não são distribuídos em dias automaticamente.
+
 Em Publicadores → Editar, o administrador ou superintendente pode criar um acesso de publicador para aquele cartão ou transferir o cartão para outro grupo. A transferência leva o cadastro, o histórico, as revisões e o vínculo de login em uma única operação. O destinatário é escolhido em uma lista de nomes de grupos, sem acesso aos seus publicadores.
 
 Na aba Publicadores, o botão Anual em cada cartão abre o relatório individual do ano correspondente ao mês de referência. O histórico exibe os 12 meses, o tipo de publicador ou pioneiro, a entrega, a participação, as horas e os estudos informados. O ano e o período podem ser ajustados; a mesma consulta pode ser exportada em PDF ou texto. Relatório pendente, participação não informada e mês sem acompanhamento permanecem distintos de uma participação marcada como Não.
@@ -15,6 +19,8 @@ Na aba Publicadores, o botão Anual em cada cartão abre o relatório individual
 Cada gravação compara a revisão esperada com a atual. Conflitos entre aparelhos exigem recarregar a base. Falhas de salvamento não são apresentadas como sucesso. A troca de grupo limpa a base anterior da interface antes de carregar a seguinte. Os relatórios ficam na memória da página e no banco; apenas a sessão de login é persistida pelo SDK.
 
 Dados da versão local anterior não são importados nem apagados silenciosamente. Exporte essa base e confira antes de substituir a base na nuvem. Importar um backup substitui os registros do grupo selecionado, sem mesclar. Mantenha backups JSON e PDFs em um lugar privado fora deste repositório.
+
+O backup JSON do grupo contém os cadastros e relatórios recebidos, sem os diários privados dos publicadores. Os diários permanecem no banco e acompanham a transferência do cartão; não são incluídos no arquivo público nem no cache de instalação. Preserve também cópias privadas do banco por uma administração confiável.
 
 O site funciona no GitHub Pages, branch main, pasta / (root), com .nojekyll. Não há compilação. O SDK Supabase está incluído em assets/vendor, com versão exata, licença e dependências fixadas no lockfile.
 
