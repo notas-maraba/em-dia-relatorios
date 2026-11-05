@@ -4,7 +4,7 @@ Aplicativo em português para acompanhar relatórios mensais, cadastrar publicad
 
 A versão 3 usa Supabase Auth e um banco privado organizado por grupos. O site público mostra somente o login. Cada responsável vê apenas seu grupo; a administração pode gerenciar grupos e vincular usuários. Não há autoautorização nem catálogo público de grupos.
 
-Na aba Grupos, escolha uma lista para abrir seu checklist, cadastros e relatórios. Cada grupo possui base e revisão próprias. Dois responsáveis vinculados ao mesmo grupo administram a mesma lista. Cada responsável regular tem um vínculo; uma conta administradora pode consultar todos os grupos.
+Ao entrar, o checklist abre diretamente no grupo vinculado à conta. Esse vínculo também define o grupo inicial de uma conta administradora. Somente a administração pode consultar outro grupo pelo seletor no topo; essa consulta não altera o grupo padrão. Cada grupo possui base e revisão próprias. Dois responsáveis vinculados ao mesmo grupo administram a mesma lista.
 
 Cada gravação compara a revisão esperada com a atual. Conflitos entre aparelhos exigem recarregar a base. Falhas de salvamento não são apresentadas como sucesso. A troca de grupo limpa a base anterior da interface antes de carregar a seguinte. Os relatórios ficam na memória da página e no banco; apenas a sessão de login é persistida pelo SDK.
 
@@ -18,7 +18,7 @@ Em Dados, na tela de entrada ou em Ajuda, use “Instalar no celular”. Navegad
 
 assets/config.js contém somente URL, chave pública publishable e retorno de login. Senhas, chaves secretas, e-mails, IDs reais dos responsáveis e backups não pertencem ao código público. supabase/schema.sql documenta a estrutura inicial e supabase/groups-upgrade.sql adapta uma instalação existente por grupos, sem incluir identidades pessoais.
 
-A aba Usuários é exclusiva da administração. Ao cadastrar uma conta, escolha um grupo existente ou crie um novo. Contas existentes podem ser vinculadas ou movidas sem apagar os relatórios do grupo. A função de servidor em-dia-users verifica o usuário e sua permissão de administrador antes de usar a API privada de autenticação. Chaves de servidor ficam somente nas variáveis protegidas do Supabase.
+A aba Usuários é exclusiva da administração. Ao cadastrar uma conta, escolha um grupo existente ou crie um novo. Contas existentes podem ser vinculadas ou movidas sem apagar os relatórios do grupo; para um administrador, esse vínculo define o grupo padrão de entrada. O comando Gerenciar grupos no topo preserva a criação de grupos. A função de servidor em-dia-users verifica o usuário e sua permissão de administrador antes de usar a API privada de autenticação. Chaves de servidor ficam somente nas variáveis protegidas do Supabase.
 
 Com Node.js 22 ou posterior:
 
