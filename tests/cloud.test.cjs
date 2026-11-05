@@ -29,6 +29,7 @@ function mock(options = {}) {
           calls.push(query);
           if (table === 'em_dia_groups') return {data: options.forbiddenGroup ? null : group, error: null};
           if (table === 'em_dia_members') return {data: options.notMember ? null : {user_id: user.id, is_admin: options.isAdmin === true}, error: options.memberError || null};
+          if (table === 'em_dia_group_members') return {data: options.membershipRow === undefined ? {user_id: user.id, group_id: group.id} : options.membershipRow, error: options.membershipError || null};
           return {data: options.row === undefined ? {group_id: group.id, state, revision: 3, updated_at: '2026-11-04T15:00:00Z'} : options.row, error: options.readError || null};
         }
       };
@@ -216,8 +217,44 @@ test('login com senha vazio falha antes da chamada ao SDK', async () => {
 
 test('perfil administrativo vem somente da tabela privada autorizada', async () => {
   const m = mock({isAdmin: true}), api = Cloud.create({client: m.client});
-  assert.deepEqual(await api.profile(), {userId: user.id, isAdmin: true});
+  assert.deepEqual(await api.profile(), {userId: user.id, isAdmin: true, defaultGroupId: group.id});
   assert.equal(m.calls.find(call => call.table === 'em_dia_members').columns, 'user_id,is_admin');
+});
+
+test('grupo padrão consulta apenas o vínculo do usuário verificado, inclusive para administradores', async () => {
+  for (const isAdmin of [false, true]) {
+    const m = mock({isAdmin}), api = Cloud.create({client: m.client});
+    assert.deepEqual(await api.profile(), {userId: user.id, isAdmin, defaultGroupId: group.id});
+    const assignment = m.calls.find(call => call.table === 'em_dia_group_members');
+    assert.deepEqual(assignment, {table: 'em_dia_group_members', columns: 'user_id,group_id', filter: ['user_id', user.id]});
+    assert(!m.calls.some(call => call.table === 'em_dia_states'));
+  }
+});
+
+test('conta sem vínculo recebe padrão nulo sem escolher outro grupo', async () => {
+  const m = mock({membershipRow: null}), api = Cloud.create({client: m.client});
+  assert.deepEqual(await api.profile(), {userId: user.id, isAdmin: false, defaultGroupId: null});
+  assert(!m.calls.some(call => call.table === 'em_dia_groups' || call.table === 'em_dia_states'));
+});
+
+test('vínculo de outra conta é recusado antes de ler os grupos', async () => {
+  const m = mock({membershipRow: {user_id: '00000000-0000-0000-0000-000000000002', group_id: group.id}});
+  await assert.rejects(Cloud.create({client: m.client}).groups(), Cloud.AccessDeniedError);
+  assert(!m.calls.some(call => call.table === 'em_dia_groups' || call.table === 'em_dia_states'));
+});
+
+test('identificador inválido no vínculo não chega à leitura de registros', async () => {
+  const m = mock({membershipRow: {user_id: user.id, group_id: 'invalid-group'}});
+  await assert.rejects(Cloud.create({client: m.client}).read(group.id), error => error.code === 'invalid_group');
+  assert(!m.calls.some(call => call.table === 'em_dia_states'));
+});
+
+test('falha ao consultar vínculo não é tratada como ausência de grupo', async () => {
+  for (const [membershipError, expected] of [[{code: '42501'}, 'access_denied'], [{code: 'network_unavailable'}, 'network_unavailable']]) {
+    const m = mock({membershipError}), api = Cloud.create({client: m.client});
+    await assert.rejects(api.groups(), error => error.code === expected);
+    assert(!m.calls.some(call => call.table === 'em_dia_groups' || call.table === 'em_dia_states'));
+  }
 });
 
 test('lista de grupos é consultada após validar conta e retorna cópias públicas de metadados', async () => {
