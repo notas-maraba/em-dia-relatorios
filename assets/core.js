@@ -4,6 +4,14 @@ const APP='em-dia-relatorios',VERSION=1,MONTHS=['Janeiro','Fevereiro','Março','
 const KINDS={publisher:'Publicador',regular:'Pioneiro regular',auxiliary:'Pioneiro auxiliar'};
 // Targets configured for this application. Only monthly tracking is presented.
 const REGULAR_PIONEER_TARGETS=Object.freeze({monthlyHours:50,annualHours:600});
+const DIARY_LIMITS=Object.freeze({maxMinutes:744*60,maxNoteLength:1000});
+function timerElapsedMs({status,elapsedMs,receivedAt}={},now){
+  if(!['idle','running','paused','stopped'].includes(status)||!Number.isSafeInteger(elapsedMs)||elapsedMs<0||
+    !Number.isSafeInteger(receivedAt)||receivedAt<0||!Number.isSafeInteger(now)||now<0||status==='idle'&&elapsedMs!==0)throw Error('O cronômetro retornou um tempo inválido.');
+  const total=elapsedMs+(status==='running'?Math.max(0,now-receivedAt):0);
+  if(!Number.isSafeInteger(total))throw Error('O cronômetro retornou um tempo inválido.');
+  return total;
+}
 const clone=v=>JSON.parse(JSON.stringify(v)),uid=()=> 'p_'+(globalThis.crypto?.randomUUID?.()||Date.now().toString(36)+Math.random().toString(36).slice(2));
 const norm=s=>String(s??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim().replace(/\s+/g,' ');
 const validMonth=s=>typeof s==='string'&&/^(19|20|21)\d{2}-(0[1-9]|1[0-2])$/.test(s);
@@ -16,7 +24,7 @@ function regularMonthlyGoal({kind,month,today,totalMinutes,entryCount}={}){
   if(checkedDay.toISOString().slice(0,10)!==today||month>today.slice(0,7))fail();
   const daysInMonth=new Date(Date.UTC(Number(month.slice(0,4)),Number(month.slice(5,7)),0)).getUTCDate();
   if(!Number.isSafeInteger(entryCount)||entryCount<0||entryCount>daysInMonth||
-    !Number.isSafeInteger(totalMinutes)||totalMinutes<0||totalMinutes>entryCount*1440)fail();
+    !Number.isSafeInteger(totalMinutes)||totalMinutes<0||totalMinutes>DIARY_LIMITS.maxMinutes||(!entryCount&&totalMinutes>0))fail();
   const targetMinutes=REGULAR_PIONEER_TARGETS.monthlyHours*60,closed=month<today.slice(0,7);
   const daysRemaining=closed?0:daysInMonth-day+1;
   if(closed&&entryCount===0)return {targetMinutes,recordedMinutes:0,remainingMinutes:null,excessMinutes:0,
@@ -64,6 +72,6 @@ for(const [m,entries] of Object.entries(s.reminders)){if(!validMonth(m)||!obj(en
 function parseBackup(raw){if(typeof raw!=='string'||raw.length>12*1024*1024)throw Error('Backup muito grande. Limite: 12 MB.');let s;try{s=JSON.parse(raw,(k,v)=>{if(['__proto__','prototype','constructor'].includes(k))throw Error('Chave não permitida.');return v;});}catch(e){throw Error('JSON inválido. Selecione um backup original do Em dia.');}validate(s);return s;}
 function monthlyText(s,m,scope='received'){const a=summary(s,m),lines=['Relatórios de '+monthLabel(m),[s.settings.congregation,s.settings.group].filter(Boolean).join(' · '),'Resumo do mês: '+a.received+'/'+a.total+' recebidos | '+a.pending+' pendentes | '+a.review+' a conferir',''];for(const {p,r,status:st,kind} of monthly(s,m,scope)){lines.push('Nome: '+p.name,'Mês: '+monthLabel(m));if(st==='pending')lines.push('Situação: Pendente');else{if(kind==='publisher')lines.push('- Participou no ministério? '+(r.participated===null?'Não informado':r.participated?'Sim':'Não'));else lines.push('Horas: '+number(r.hours)+(r.hours!==null?'h':'')+' ('+(kind==='regular'?'Regular':'Auxiliar')+')');lines.push('Estudos bíblicos: '+number(r.studies));if(st==='review')lines.push('Conferir: falta informar '+missing(r).join(', ')+'.');}lines.push('--------------------');}lines.push('Totais dos recebidos: '+number(a.hours)+'h de pioneiros; '+a.studies+' estudos informados.');if(a.unknownStudies||a.unknownHours)lines.push('Totais parciais: há campos não informados.');return lines.join('\n');}
 const reminderText=(s,p,m)=>s.settings.reminder.replaceAll('{nome}',p.name).replaceAll('{mes}',monthLabel(m));
-const api={APP,VERSION,MONTHS,KINDS,REGULAR_PIONEER_TARGETS,regularMonthlyGoal,clone,uid,norm,validMonth,currentMonth,addMonth,monthLabel,emptyState,num,number,inPeriod,roleAt,getReport,kindAt,participation,missing,status,monthPeople,monthly,summary,periodMonths,annualDetail,annualSummary,report,validate,parseBackup,monthlyText,reminderText};
+const api={APP,VERSION,MONTHS,KINDS,REGULAR_PIONEER_TARGETS,DIARY_LIMITS,timerElapsedMs,regularMonthlyGoal,clone,uid,norm,validMonth,currentMonth,addMonth,monthLabel,emptyState,num,number,inPeriod,roleAt,getReport,kindAt,participation,missing,status,monthPeople,monthly,summary,periodMonths,annualDetail,annualSummary,report,validate,parseBackup,monthlyText,reminderText};
 if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.EmDiaCore=api;
 })(typeof window!=='undefined'?window:globalThis);

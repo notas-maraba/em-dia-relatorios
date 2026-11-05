@@ -16,13 +16,15 @@ const ui={tab:'checklist',month:firstMonth,filter:'all',query:'',peopleQuery:'',
 let dirty=false,modalHandler=null,returnFocus=null;
 let ownRevisions=[],pendingRevisions=[],revisionsLoading=false,revisionsError='',workflowEpoch=0;
 let ownHours=null,hoursLoading=false,hoursError='',hoursBlocked=false,hoursEpoch=0;
+let ownTimer=null,timerReceivedAt=0,timerLoading=false,timerBlocked=false,timerError='',timerEpoch=0,timerTick=null;
 const ACCESS_ROLES={admin:'Administrador',superintendent:'Superintendente',publisher:'Publicador'};
 const isPublisher=()=>profileData?.role==='publisher';
 const isManager=()=>profileData?.role==='admin'||profileData?.role==='superintendent';
 const scope=()=>authEpoch+':'+groupEpoch;
 function toast(message,error=false){const box=document.createElement('div');box.className='toast'+(error?' danger':'');box.textContent=message;$('#toasts').append(box);setTimeout(()=>box.remove(),error?9000:4500);}
 function clearHours(){hoursEpoch++;ownHours=null;hoursLoading=false;hoursError='';hoursBlocked=false;}
-function clearGroup(){groupEpoch++;readEpoch++;usersEpoch++;workflowEpoch++;clearHours();state=null;selectedGroup=null;usersList=[];usersLoading=false;usersError='';ownRevisions=[];pendingRevisions=[];revisionsLoading=false;revisionsError='';cloudRevision=0;failedCandidate=null;blocked=false;saving=false;loading=false;dirty=false;modalHandler=null;returnFocus=null;$('#modal').close();$('#modal').innerHTML='';$('#toasts').innerHTML='';document.body.style.overflow='';ui.tab='checklist';ui.query='';ui.peopleQuery='';ui.person='all';}
+function clearTimer(){timerEpoch++;ownTimer=null;timerReceivedAt=0;timerLoading=false;timerBlocked=false;timerError='';if(timerTick!==null)clearInterval(timerTick);timerTick=null;}
+function clearGroup(){groupEpoch++;readEpoch++;usersEpoch++;workflowEpoch++;clearHours();clearTimer();state=null;selectedGroup=null;usersList=[];usersLoading=false;usersError='';ownRevisions=[];pendingRevisions=[];revisionsLoading=false;revisionsError='';cloudRevision=0;failedCandidate=null;blocked=false;saving=false;loading=false;dirty=false;modalHandler=null;returnFocus=null;$('#modal').close();$('#modal').innerHTML='';$('#toasts').innerHTML='';document.body.style.overflow='';ui.tab='checklist';ui.query='';ui.peopleQuery='';ui.person='all';}
 function wipePrivateState(){authEpoch++;clearGroup();account=null;profileData=null;groupList=[];usersList=[];usersLoading=false;usersError='';adminBusy=false;toggleBusy();}
 function requireAccess(){if(!account||!profileData)throw Error('Entre na sua conta e aguarde a confirmação do seu acesso.');}
 function requireAdmin(){requireAccess();if(profileData.role!=='admin')throw Error('Somente o administrador pode gerenciar usuários.');}
@@ -87,7 +89,7 @@ try{
     cloudRevision=bundle.revision||0;blocked=false;failedCandidate=null;cloudMessage='';cloudPhase='ready';ui.person=profile.publisherId;ui.reportScope='all';
     if(!hadState){const currentMonth=serviceToday().slice(0,7),person=state.people[0];ui.month=C.inPeriod(person,currentMonth)&&ownKind(currentMonth)!=='publisher'?currentMonth:state.activeMonth;ui.year=Math.min(2198,Number(ui.month.slice(0,4)));ui.tab='my-card';}
     if(!['my-card','reports'].includes(ui.tab))ui.tab='my-card';
-    if(discard){closeModal(true);dirty=false;}render();loadOwnHours({quiet});return;
+    if(discard){closeModal(true);dirty=false;}render();loadOwnHours({quiet});loadOwnTimer({quiet});return;
   }
   ownRevisions=[];
   const groups=await cloud.groups();if(!current())return;
@@ -198,7 +200,7 @@ else{
   if(blocked)html+=note(E(cloudMessage||'Recarregue a nuvem antes de continuar.'),'danger')+'<div class="row wrap cloud-recovery">'+btn(failedCandidate?'Baixar alteração não confirmada':'Baixar cópia dos dados exibidos','recovery-copy','','soft','down')+btn('Recarregar da nuvem','cloud-reload','','primary')+'</div>';
   html+=ui.tab==='checklist'?(state.people.length?checklist():welcome()):ui.tab==='people'?peoplePage():ui.tab==='reviews'?revisionsPage():ui.tab==='reports'?reportsPage():dataPage();
 }
-$('#app').innerHTML=html;if(saving||adminBusy)toggleBusy();
+$('#app').innerHTML=html;syncTimerTick();if(saving||adminBusy)toggleBusy();
 }
 function ownPerson(){requireData();if(!isPublisher()||state.people.length!==1||state.people[0].id!==profileData.publisherId)throw Error('Seu cartão não está disponível. Recarregue seu acesso.');return state.people[0];}
 function activityFields(report){
@@ -214,20 +216,20 @@ function ownKind(month=ui.month){const p=ownPerson(),r=C.getReport(state,p.id,mo
 function validDay(value){return typeof value==='string'&&/^(19|20|21)\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)&&new Date(value+'T12:00:00Z').toISOString().slice(0,10)===value;}
 function duration(minutes){return Math.floor(minutes/60)+'h'+String(minutes%60).padStart(2,'0');}
 function checkedOwnHours(bundle,month){
-  const p=ownPerson();
+  const p=ownPerson(),limits=C.DIARY_LIMITS;
   if(!bundle||bundle.groupId!==selectedGroup.id||bundle.personId!==p.id||bundle.month!==month||bundle.kind!==ownKind(month)||
     !['publisher','regular','auxiliary'].includes(bundle.kind)||!validDay(bundle.today)||typeof bundle.closed!=='boolean'||bundle.closed!==(month<bundle.today.slice(0,7))||
     !Number.isSafeInteger(bundle.version)||bundle.version<0||!bundle.entries||typeof bundle.entries!=='object'||Array.isArray(bundle.entries)||
-    Object.entries(bundle.entries).some(([date,minutes])=>!validDay(date)||date.slice(0,7)!==month||date>bundle.today||!Number.isSafeInteger(minutes)||minutes<0||minutes>1440)||
-    !Number.isSafeInteger(bundle.totalMinutes)||bundle.totalMinutes!==Object.values(bundle.entries).reduce((total,minutes)=>total+minutes,0)||
+    Object.entries(bundle.entries).some(([date,minutes])=>!validDay(date)||date.slice(0,7)!==month||date>bundle.today||!Number.isSafeInteger(minutes)||minutes<0||minutes>limits.maxMinutes)||
+    !Number.isSafeInteger(bundle.totalMinutes)||bundle.totalMinutes<0||bundle.totalMinutes>limits.maxMinutes||bundle.totalMinutes!==Object.values(bundle.entries).reduce((total,minutes)=>total+minutes,0)||
     !Array.isArray(bundle.launches)||bundle.launches.length>1000)throw Error('O diário retornado não corresponde ao seu cartão e mês. Recarregue seus dados.');
   const ids=new Set(),totals=Object.create(null),launches=bundle.launches.map(launch=>{
     if(!launch||typeof launch!=='object'||Array.isArray(launch)||!validLaunchId(launch.id)||ids.has(launch.id.toLowerCase())||
       !validDay(launch.date)||launch.date.slice(0,7)!==month||launch.date>bundle.today||
-      !Number.isSafeInteger(launch.minutes)||launch.minutes<0||launch.minutes>1440)throw Error('O diário retornou lançamentos inválidos. Atualize seu cartão.');
+      !Number.isSafeInteger(launch.minutes)||launch.minutes<0||launch.minutes>limits.maxMinutes||
+      (launch.note!==undefined&&(typeof launch.note!=='string'||launch.note.length>limits.maxNoteLength)))throw Error('O diário retornou lançamentos inválidos. Atualize seu cartão.');
     const id=launch.id.toLowerCase();ids.add(id);totals[launch.date]=(totals[launch.date]||0)+launch.minutes;
-    if(totals[launch.date]>1440)throw Error('O diário retornou uma soma diária inválida. Atualize seu cartão.');
-    return {id,date:launch.date,minutes:launch.minutes};
+    return {id,date:launch.date,minutes:launch.minutes,note:launch.note||''};
   });
   if(Object.keys(totals).length!==Object.keys(bundle.entries).length||Object.entries(totals).some(([date,minutes])=>bundle.entries[date]!==minutes)||
     (bundle.version===0&&launches.length))throw Error('A soma dos lançamentos não corresponde ao diário. Atualize seu cartão.');
@@ -235,6 +237,94 @@ function checkedOwnHours(bundle,month){
 }
 function validLaunchId(value){return typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);}
 function newHoursLaunchId(){const id=window.crypto?.randomUUID?.();if(!validLaunchId(id))throw Error('Atualize o navegador para registrar horas com segurança.');return id.toLowerCase();}
+function checkedOwnTimer(bundle){
+  const p=ownPerson(),statuses=['idle','running','paused','stopped'];
+  if(!bundle||bundle.groupId!==selectedGroup.id||bundle.personId!==p.id||!statuses.includes(bundle.status)||
+    !Number.isSafeInteger(bundle.version)||bundle.version<0||!Number.isSafeInteger(bundle.elapsedMs)||bundle.elapsedMs<0||
+    !Number.isSafeInteger(bundle.accumulatedMs)||bundle.accumulatedMs<0||!Number.isFinite(Date.parse(bundle.serverNow))||
+    (bundle.status==='idle'?(bundle.timerId!==null||bundle.startDate!==null||bundle.elapsedMs!==0):
+      (!validLaunchId(bundle.timerId)||!validDay(bundle.startDate))))throw Error('O cronômetro retornado não corresponde ao seu cartão. Atualize antes de continuar.');
+  return {groupId:bundle.groupId,personId:bundle.personId,timerId:bundle.timerId?.toLowerCase()||null,status:bundle.status,version:bundle.version,startDate:bundle.startDate,
+    startedAt:bundle.startedAt||null,anchorAt:bundle.anchorAt||null,stoppedAt:bundle.stoppedAt||null,accumulatedMs:bundle.accumulatedMs,elapsedMs:bundle.elapsedMs,serverNow:bundle.serverNow};
+}
+function timerDuration(milliseconds){const seconds=Math.floor(milliseconds/1000);return [Math.floor(seconds/3600),Math.floor(seconds/60)%60,seconds%60].map(value=>String(value).padStart(2,'0')).join(':');}
+function timerElapsed(){return ownTimer?C.timerElapsedMs({...ownTimer,receivedAt:timerReceivedAt},Date.now()):0;}
+function paintTimer(){if(!isPublisher()||!state||!ownTimer)return;const clock=$('#own-timer-elapsed');if(clock)clock.textContent=timerDuration(timerElapsed());}
+function syncTimerTick(){
+  const running=isPublisher()&&state&&ownTimer?.status==='running'&&document.visibilityState!=='hidden';
+  if(!running&&timerTick!==null){clearInterval(timerTick);timerTick=null;}
+  if(running&&timerTick===null)timerTick=setInterval(paintTimer,1000);
+  if(running)paintTimer();
+}
+function acceptOwnTimer(bundle){ownTimer=checkedOwnTimer(bundle);timerReceivedAt=Date.now();timerBlocked=false;timerError='';syncTimerTick();}
+async function loadOwnTimer({quiet=false}={}){
+  if(!isPublisher()||!state||!selectedGroup||saving||adminBusy)return;
+  const token=scope(),ticket=++timerEpoch,personId=ownPerson().id,groupId=selectedGroup.id;
+  timerLoading=true;if(!quiet&&!dirty&&!$('#modal').open)render();
+  try{
+    const result=await cloud.readOwnTimer();
+    if(token!==scope()||ticket!==timerEpoch||!isPublisher()||profileData.publisherId!==personId||selectedGroup?.id!==groupId)return;
+    acceptOwnTimer(result);
+  }catch(error){
+    if(token!==scope()||ticket!==timerEpoch)return;if(closeDenied(error))return;
+    timerBlocked=true;timerError='Não foi possível confirmar o cronômetro. A contagem na nuvem pode continuar. Atualize antes de usar os controles.';
+  }finally{if(token===scope()&&ticket===timerEpoch){timerLoading=false;if(!dirty&&!$('#modal').open)render();else paintTimer();}}
+}
+function canStartOwnTimer(){const p=ownPerson(),month=serviceToday().slice(0,7);return ui.month===month&&C.inPeriod(p,month)&&['regular','auxiliary'].includes(ownKind(month));}
+function ownTimerPanel({standalone=false}={}){
+  const active=ownTimer&&ownTimer.status!=='idle',canStart=canStartOwnTimer();if(!active&&!canStart&&!timerError)return '';
+  const status=timerBlocked?'Status a confirmar':timerLoading?'Atualizando…':ownTimer?({idle:'Pronto para iniciar',running:'Em contagem',paused:'Pausado',stopped:'Aguardando lançamento'})[ownTimer.status]:'Carregando…';
+  const disabled=timerLoading||timerBlocked||!ownTimer,button=(text,action,cls='soft')=>'<button type="button" class="btn '+cls+'" data-action="'+action+'" '+(disabled?'disabled':'')+'>'+text+'</button>';
+  let controls='';
+  if(ownTimer?.status==='idle'&&canStart)controls=button('Iniciar','own-timer-start');
+  else if(ownTimer?.status==='running')controls=button('Pausar','own-timer-pause')+button('Parar','own-timer-stop');
+  else if(ownTimer?.status==='paused')controls=button('Continuar','own-timer-resume')+button('Parar','own-timer-stop');
+  else if(ownTimer?.status==='stopped')controls=button('Conferir e lançar','own-timer-review','primary grow')+button('Descartar','own-timer-discard','ghost');
+  return '<'+(standalone?'section':'div')+' class="'+(standalone?'section-card ':'')+'hours-timer"><div class="section-title"><h2>Cronômetro</h2>'+badge(status)+'</div><div class="hours-timer-clock"><strong id="own-timer-elapsed" aria-label="Tempo do cronômetro">'+E(timerDuration(timerElapsed()))+'</strong>'+(active?'<span>Iniciado em '+E(formatDate(ownTimer.startDate))+'</span>':'')+'</div>'+(timerError?note(E(timerError),'warn'):'')+'<div class="hours-timer-actions">'+controls+btn('Atualizar','own-timer-refresh','','ghost small','clock')+'</div><p class="help">'+(ownTimer?.status==='stopped'?'Confira o total e lance as horas no diário. O tempo permanece guardado até lançar ou descartar.':'Fechar o aplicativo não pausa nem apaga o cronômetro. Pause ou pare pelos botões.')+'</p></'+(standalone?'section':'div')+'>';
+}
+async function changeOwnTimer(action){
+  ownPerson();if(timerLoading||timerBlocked||!ownTimer)throw Error('Atualize o cronômetro antes de continuar.');
+  const required={start:'idle',pause:'running',resume:'paused',stop:ownTimer.status,discard:'stopped'};
+  if(!Object.hasOwn(required,action)||ownTimer.status!==required[action]||(action==='stop'&&!['running','paused'].includes(ownTimer.status)))throw Error('Atualize o cronômetro para usar este controle.');
+  if(action==='start'&&!canStartOwnTimer())throw Error('Inicie o cronômetro no mês atual de pioneiro regular ou auxiliar.');
+  if(dirty&&!confirm('Descartar as alterações ainda não salvas para usar o cronômetro?'))return;
+  if(action==='discard'&&!confirm('Descartar o tempo parado sem lançar horas? Esta ação não poderá ser desfeita.'))return;
+  closeModal(true);const token=scope(),ticket=++timerEpoch,timerId=action==='start'?newHoursLaunchId():ownTimer.timerId,expectedVersion=ownTimer.version;let review=false;
+  saving=true;toggleBusy();
+  try{const result=await cloud.changeOwnTimer({action,timerId,expectedVersion});if(token!==scope()||ticket!==timerEpoch)return;acceptOwnTimer(result);render();toast(action==='discard'?'Tempo descartado.':'Cronômetro confirmado na nuvem.');review=action==='stop'&&ownTimer.status==='stopped'&&ownTimer.timerId===timerId;}
+  catch(error){if(token!==scope()||ticket!==timerEpoch)return;if(closeDenied(error))return;timerBlocked=true;timerError='Não foi possível confirmar esta ação. A contagem na nuvem pode continuar. Atualize o cronômetro antes de tentar novamente.';render();}
+  finally{if(token===scope()){saving=false;toggleBusy();}}
+  if(review&&token===scope())ownTimerForm();
+}
+function ownTimerForm(){
+  const p=ownPerson(),timer=ownTimer;if(timerBlocked||timerLoading||!timer||timer.status!=='stopped')throw Error('Pare e atualize o cronômetro antes de lançar as horas.');
+  if(dirty&&!confirm('Descartar as alterações ainda não salvas para conferir o cronômetro?'))return;
+  const launchId=newHoursLaunchId(),minutes=Math.round(timer.elapsedMs/60000);
+  modal('Conferir tempo e lançar','<div class="note-box hours-send-total"><span>Tempo cronometrado</span><strong>'+E(timerDuration(timer.elapsedMs))+'</strong></div><p class="help">O total sugerido foi arredondado para o minuto mais próximo. Ajuste a data, as horas e os minutos antes de lançar, se necessário.</p><div class="stack"><div class="field"><label for="timer-launch-date">Data do lançamento</label><input id="timer-launch-date" name="date" type="date" min="1900-01-01" max="'+E(serviceToday())+'" value="'+E(timer.startDate)+'" required></div><div class="grid2 hours-entry"><div class="field"><label for="timer-launch-hours">Horas</label><input id="timer-launch-hours" name="dayHours" type="number" inputmode="numeric" min="0" max="'+Math.floor(C.DIARY_LIMITS.maxMinutes/60)+'" step="1" value="'+Math.floor(minutes/60)+'"></div><div class="field"><label for="timer-launch-minutes">Minutos</label><input id="timer-launch-minutes" name="dayMinutes" type="number" inputmode="numeric" min="0" max="59" step="1" value="'+minutes%60+'"></div></div><div class="field"><label for="timer-launch-note">Observação (opcional)</label><textarea id="timer-launch-note" name="note" rows="2" maxlength="'+C.DIARY_LIMITS.maxNoteLength+'"></textarea><p class="help">A observação fica privada no diário e não entra no relatório mensal.</p></div></div>',async fd=>{
+    ownPerson();if(timerBlocked)throw Error('Atualize o cronômetro antes de tentar novamente.');
+    const date=String(fd.get('date')||''),hoursRaw=String(fd.get('dayHours')??'').trim(),minutesRaw=String(fd.get('dayMinutes')??'').trim(),hours=Number(hoursRaw),remainder=Number(minutesRaw),note=String(fd.get('note')??'').trim(),total=hours*60+remainder;
+    if(!validDay(date)||date>serviceToday())throw Error('Escolha uma data válida até hoje.');
+    if((!hoursRaw&&!minutesRaw)||!Number.isInteger(hours)||!Number.isInteger(remainder)||hours<0||remainder<0||remainder>59||total>C.DIARY_LIMITS.maxMinutes)throw Error('Preencha as horas ou os minutos com números inteiros válidos.');
+    if(note.length>C.DIARY_LIMITS.maxNoteLength)throw Error('Use até '+C.DIARY_LIMITS.maxNoteLength+' caracteres na observação.');
+    const token=scope(),ticket=++timerEpoch,month=date.slice(0,7);saving=true;toggleBusy();let posting=false;
+    try{
+      const diary=checkedOwnHours(await cloud.readOwnHours(month),month);if(token!==scope()||ticket!==timerEpoch)return;
+      if(!['regular','auxiliary'].includes(diary.kind))throw Error('Escolha uma data de um mês em que você é pioneiro regular ou auxiliar.');
+      if(diary.launches.length>=1000||diary.totalMinutes+total>C.DIARY_LIMITS.maxMinutes)throw Error('Confira os lançamentos deste mês: o limite é de 1000 registros e '+C.number(C.DIARY_LIMITS.maxMinutes/60)+' horas.');
+      posting=true;hoursEpoch++;
+      const result=await cloud.postOwnTimer({timerId:timer.timerId,expectedTimerVersion:timer.version,launchId,date,minutes:total,note,expectedHoursVersion:diary.version});
+      if(token!==scope()||ticket!==timerEpoch)return;
+      const incoming=checkedOwnHours(result.diary,month),confirmed=incoming.launches.find(item=>item.id===launchId),receipt=result.receipt;
+      if(result.launchId!==launchId||!receipt||receipt.timerId!==timer.timerId||receipt.launchId!==launchId||receipt.date!==date||receipt.minutes!==total||receipt.note!==note||
+        (!result.unchanged&&(!confirmed||confirmed.date!==date||confirmed.minutes!==total||confirmed.note!==note)))throw Error('O lançamento do cronômetro não foi confirmado.');
+      acceptOwnTimer(result.timer);if(ui.month===month){ownHours=incoming;hoursBlocked=false;hoursError='';}closeModal(true);render();toast('Tempo lançado no diário de '+C.monthLabel(month)+'.');
+    }catch(error){
+      if(token!==scope()||ticket!==timerEpoch)return;if(closeDenied(error))return;
+      if(posting){timerBlocked=true;timerError='Não foi possível confirmar o lançamento. Atualize o cronômetro e o diário antes de continuar; o tempo pode já ter sido lançado.';hoursBlocked=true;dirty=true;render();throw Error(timerError);}
+      throw error;
+    }finally{if(token===scope()){saving=false;toggleBusy();}}
+  },'Lançar',p.name);
+}
 async function loadOwnHours({quiet=false}={}){
   if(!isPublisher()||!state||!selectedGroup||saving||adminBusy||dirty||$('#modal').open)return;
   const p=ownPerson(),month=ui.month;
@@ -266,11 +356,11 @@ function ownMonthlyGoal(diary){
   return '<div class="hours-goal" aria-label="Acompanhamento mensal do pioneiro regular">'+heading+'<div class="hours-goal-stats"><div><span>Registradas no diário</span><strong>'+E(recorded)+'</strong></div><div><span>'+remainingLabel+'</span><strong>'+E(remaining)+'</strong></div></div>'+progress+'<div class="hours-goal-caption"><span>'+E(percent)+'% da meta</span><span>'+diary.launches.length+' '+(diary.launches.length===1?'lançamento':'lançamentos')+' em '+entries+' '+(entries===1?'dia':'dias')+'</span></div>'+pace+'</div>';
 }
 function ownHoursPanel(){
-  const p=ownPerson();if(ownKind()==='publisher'||(!C.inPeriod(p,ui.month)&&!C.getReport(state,p.id,ui.month)))return '';
+  const p=ownPerson();if(ownKind()==='publisher'||(!C.inPeriod(p,ui.month)&&!C.getReport(state,p.id,ui.month)))return ownTimerPanel({standalone:true});
   const diary=ownHours?.month===ui.month?ownHours:null,entries=diary?Object.entries(diary.entries).sort(([a],[b])=>b.localeCompare(a)):[],ready=!!diary&&!hoursLoading&&!hoursBlocked&&!blocked;
-  const rows=entries.map(([date,minutes])=>'<li class="hours-day"><div class="hours-day-heading"><strong>'+E(formatDate(date))+'</strong><span>Total do dia: '+E(duration(minutes))+'</span></div><ol class="hours-launches">'+diary.launches.filter(launch=>launch.date===date).map((launch,index)=>'<li><div><span class="hours-launch-order">Lançamento '+(index+1)+'</span><strong>'+E(duration(launch.minutes))+'</strong></div><button type="button" class="btn ghost small" data-action="own-hours-edit" data-id="'+E(launch.id)+'" aria-label="Editar lançamento '+(index+1)+' de '+E(formatDate(date))+'" '+(!ready?'disabled':'')+'>'+icon('edit')+'Editar</button></li>').join('')+'</ol></li>').join('');
+  const rows=entries.map(([date,minutes])=>'<li class="hours-day"><div class="hours-day-heading"><strong>'+E(formatDate(date))+'</strong><span>Total da data: '+E(duration(minutes))+'</span></div><ol class="hours-launches">'+diary.launches.filter(launch=>launch.date===date).map((launch,index)=>'<li><div><span class="hours-launch-order">Lançamento '+(index+1)+'</span><strong>'+E(duration(launch.minutes))+'</strong>'+(launch.note?'<p class="hours-launch-note">'+E(launch.note)+'</p>':'')+'</div><button type="button" class="btn ghost small" data-action="own-hours-edit" data-id="'+E(launch.id)+'" aria-label="Editar lançamento '+(index+1)+' de '+E(formatDate(date))+'" '+(!ready?'disabled':'')+'>'+icon('edit')+'Editar</button></li>').join('')+'</ol></li>').join('');
   const summary=ready?(diary.kind==='regular'?ownMonthlyGoal(diary):'<div class="hours-summary"><strong>'+E(duration(diary.totalMinutes))+'</strong><span>'+diary.launches.length+' '+(diary.launches.length===1?'lançamento':'lançamentos')+' em '+entries.length+' '+(entries.length===1?'dia':'dias')+'</span></div>'):'';
-  return '<section class="section-card hours-diary"><div class="section-title"><h2>Diário de horas</h2>'+badge(diary?.closed?'Mês encerrado':'Em andamento')+'</div>'+summary+'<p class="help">Salve as horas de cada dia. O diário é privado e só entra no relatório quando você enviar o mês.</p>'+(hoursLoading?'<p class="small muted" role="status">Carregando diário…</p>':'')+(hoursError?note(E(hoursError),'danger')+btn('Atualizar meu cartão','cloud-reload','','soft full','clock'):'')+'<div class="hours-actions"><button type="button" class="btn soft grow" data-action="own-hours-edit" '+(!ready?'disabled':'')+'>'+icon('plus')+'Lançar horas</button>'+btn('Recarregar diário','own-hours-refresh','','ghost small','clock')+'</div>'+(rows?'<details class="hours-days"><summary>Ver lançamentos ('+diary.launches.length+')</summary><ul>'+rows+'</ul></details>':'<p class="small muted spaced">Nenhum lançamento salvo. As horas já recebidas não são divididas automaticamente entre os dias.</p>')+'<button type="button" class="btn primary full spaced" data-action="own-hours-submit" '+(!ready||!diary.closed||!entries.length?'disabled':'')+'>'+icon('upload')+'Conferir e enviar o mês</button><p class="help">'+(diary&&!diary.closed?'Continue lançando os dias. O envio fica disponível depois que o mês encerrar.':'Confira os estudos bíblicos antes de enviar. Um reenvio corrigido aguarda decisão do superintendente.')+'</p></section>';
+  return '<section class="section-card hours-diary"><div class="section-title"><h2>Diário de horas</h2>'+badge(diary?.closed?'Mês encerrado':'Em andamento')+'</div>'+summary+'<p class="help">Salve seus lançamentos. O diário é privado; somente o total de horas entra no relatório quando você enviar o mês.</p>'+ownTimerPanel()+(hoursLoading?'<p class="small muted" role="status">Carregando diário…</p>':'')+(hoursError?note(E(hoursError),'danger')+btn('Atualizar meu cartão','cloud-reload','','soft full','clock'):'')+'<div class="hours-actions"><button type="button" class="btn soft grow" data-action="own-hours-edit" '+(!ready?'disabled':'')+'>'+icon('plus')+'Lançar horas</button>'+btn('Recarregar diário','own-hours-refresh','','ghost small','clock')+'</div>'+(rows?'<details class="hours-days"><summary>Ver lançamentos ('+diary.launches.length+')</summary><ul>'+rows+'</ul></details>':'<p class="small muted spaced">Nenhum lançamento salvo. As horas já recebidas não são divididas automaticamente entre os dias.</p>')+'<button type="button" class="btn primary full spaced" data-action="own-hours-submit" '+(!ready||!diary.closed||!entries.length?'disabled':'')+'>'+icon('upload')+'Conferir e enviar o mês</button><p class="help">'+(diary&&!diary.closed?'Continue registrando suas horas. O envio fica disponível depois que o mês encerrar.':'Confira os estudos bíblicos antes de enviar. Um reenvio corrigido aguarda decisão do superintendente.')+'</p></section>';
 }
 function ownHoursForm(editId=''){
   const p=ownPerson(),month=ui.month,diary=ownHours;
@@ -282,21 +372,22 @@ function ownHoursForm(editId=''){
   const launchId=editing?old.id:newHoursLaunchId();
   if(!editing&&diary.launches.some(launch=>launch.id===launchId))throw Error('Não foi possível preparar um novo lançamento. Atualize seu cartão e tente novamente.');
   const lastDay=C.addMonth(month,1)+'-01',lastDate=new Date(new Date(lastDay+'T12:00:00Z').getTime()-86400000).toISOString().slice(0,10),maxDate=lastDate<diary.today?lastDate:diary.today;
-  const date=editing?old.date:month===diary.today.slice(0,7)?diary.today:maxDate,value=editing?old.minutes:null;
-  modal(editing?'Editar lançamento':'Novo lançamento de horas','<div class="stack"><div class="field"><label for="hours-date">Dia do serviço</label><input id="hours-date" name="date" type="date" min="'+E(month+'-01')+'" max="'+E(maxDate)+'" value="'+E(date)+'" '+(editing?'readonly aria-readonly="true"':'')+' required></div><div class="grid2 hours-entry"><div class="field"><label for="hours-duration">Horas</label><input id="hours-duration" name="dayHours" type="number" inputmode="numeric" min="0" max="24" step="1" value="'+(value===null?'':Math.floor(value/60))+'" placeholder="Ex.: 2"></div><div class="field"><label for="hours-minutes">Minutos</label><input id="hours-minutes" name="dayMinutes" type="number" inputmode="numeric" min="0" max="59" step="1" value="'+(value===null?'':value%60)+'" placeholder="Ex.: 30"></div></div><p class="help">Você pode lançar mais de uma vez no mesmo dia. Cada lançamento será somado. Preencha horas ou minutos; informe zero explicitamente quando necessário.</p><p class="help">A soma dos lançamentos de um dia pode ter até 24 horas.</p></div>'+note(editing?'Salvar altera somente este lançamento. Os demais registros e o relatório recebido permanecem preservados.':'Salvar adiciona este lançamento ao diário na nuvem. O relatório mensal recebido permanece como está.'),async(fd,submitter)=>{
+  const date=editing?old.date:month===diary.today.slice(0,7)?diary.today:maxDate,value=editing?old.minutes:null,savedNote=editing?old.note||'':'';
+  modal(editing?'Editar lançamento':'Novo lançamento de horas','<div class="stack"><div class="field"><label for="hours-date">Data do lançamento</label><input id="hours-date" name="date" type="date" min="'+E(month+'-01')+'" max="'+E(maxDate)+'" value="'+E(date)+'" '+(editing?'readonly aria-readonly="true"':'')+' required></div><div class="grid2 hours-entry"><div class="field"><label for="hours-duration">Horas</label><input id="hours-duration" name="dayHours" type="number" inputmode="numeric" min="0" max="'+Math.floor(C.DIARY_LIMITS.maxMinutes/60)+'" step="1" value="'+(value===null?'':Math.floor(value/60))+'" placeholder="Ex.: 2"></div><div class="field"><label for="hours-minutes">Minutos</label><input id="hours-minutes" name="dayMinutes" type="number" inputmode="numeric" min="0" max="59" step="1" value="'+(value===null?'':value%60)+'" placeholder="Ex.: 30"></div></div><p class="help">Você pode registrar horas acumuladas acima de 24 horas na mesma data. Cada lançamento será somado ao mês. Preencha horas ou minutos; informe zero explicitamente quando necessário.</p><div class="field"><label for="hours-note">Observação (opcional)</label><textarea id="hours-note" name="note" rows="2" maxlength="'+C.DIARY_LIMITS.maxNoteLength+'">'+E(savedNote)+'</textarea><p class="help">A observação fica privada no diário e não entra no relatório mensal.</p></div></div>'+note(editing?'Salvar altera somente este lançamento. Os demais registros e o relatório recebido permanecem preservados.':'Salvar adiciona este lançamento ao diário na nuvem. O relatório mensal recebido permanece como está.'),async(fd,submitter)=>{
     ownPerson();if(hoursBlocked||blocked)throw Error('Recarregue o diário antes de tentar novamente.');
-    const removing=submitter?.value==='remove',selectedDate=editing?old.date:String(fd.get('date')||''),hoursRaw=String(fd.get('dayHours')??'').trim(),minutesRaw=String(fd.get('dayMinutes')??'').trim(),hours=Number(hoursRaw),minutes=Number(minutesRaw);
+    const removing=submitter?.value==='remove',selectedDate=editing?old.date:String(fd.get('date')||''),hoursRaw=String(fd.get('dayHours')??'').trim(),minutesRaw=String(fd.get('dayMinutes')??'').trim(),hours=Number(hoursRaw),minutes=Number(minutesRaw),launchNote=removing?null:String(fd.get('note')??'').trim();
     if(!validDay(selectedDate)||selectedDate.slice(0,7)!==month||selectedDate>diary.today)throw Error('Escolha um dia válido deste mês, até hoje.');
-    if(!removing&&((!hoursRaw&&!minutesRaw)||!Number.isInteger(hours)||!Number.isInteger(minutes)||hours<0||minutes<0||minutes>59||hours*60+minutes>1440))throw Error('Preencha as horas ou os minutos com números inteiros, de 0 até 24 horas no dia.');
-    const launchMinutes=removing?null:hours*60+minutes,dayMinutes=(diary.entries[selectedDate]||0)-(editing?old.minutes:0)+(launchMinutes||0);
-    if(!removing&&dayMinutes>1440)throw Error('Os lançamentos deste dia somam mais de 24 horas. Confira os registros antes de salvar.');
+    if(!removing&&((!hoursRaw&&!minutesRaw)||!Number.isInteger(hours)||!Number.isInteger(minutes)||hours<0||minutes<0||minutes>59||hours*60+minutes>C.DIARY_LIMITS.maxMinutes))throw Error('Preencha as horas ou os minutos com números inteiros válidos.');
+    if(!removing&&launchNote.length>C.DIARY_LIMITS.maxNoteLength)throw Error('Use até '+C.DIARY_LIMITS.maxNoteLength+' caracteres na observação.');
+    const launchMinutes=removing?null:hours*60+minutes,monthMinutes=diary.totalMinutes-(editing?old.minutes:0)+(launchMinutes||0);
+    if(!removing&&monthMinutes>C.DIARY_LIMITS.maxMinutes)throw Error('O total do mês pode ter até '+C.number(C.DIARY_LIMITS.maxMinutes/60)+' horas. Confira os lançamentos.');
     if(removing&&(!editing||!confirm('Remover somente este lançamento? Os demais registros e o relatório mensal serão preservados.')))return;
     const token=scope();hoursEpoch++;saving=true;toggleBusy();
     try{
-      const result=await cloud.saveOwnHoursLaunch({id:launchId,date:selectedDate,minutes:launchMinutes,expectedVersion:diary.version});
+      const result=await cloud.saveOwnHoursLaunch({id:launchId,date:selectedDate,minutes:launchMinutes,note:launchNote,expectedVersion:diary.version});
       if(token!==scope()||ui.month!==month)return;
       const incoming=checkedOwnHours(result,month),confirmed=incoming.launches.find(launch=>launch.id===launchId);
-      if(removing?!!confirmed:!confirmed||confirmed.date!==selectedDate||confirmed.minutes!==launchMinutes)throw Error('O lançamento não foi confirmado. Atualize o diário antes de continuar.');
+      if(removing?!!confirmed:!confirmed||confirmed.date!==selectedDate||confirmed.minutes!==launchMinutes||confirmed.note!==launchNote)throw Error('O lançamento não foi confirmado. Atualize o diário antes de continuar.');
       ownHours=incoming;hoursBlocked=false;hoursError='';closeModal(true);render();toast(removing?'Lançamento removido do diário.':'Lançamento salvo na nuvem.');
     }catch(error){
       if(token!==scope()||ui.month!==month)return;if(closeDenied(error))return;
@@ -460,15 +551,15 @@ if(action==='tab'){
   if((dirty||failedCandidate)&&!confirm('Descartar as alterações não salvas desta tela? Baixe uma cópia antes, se precisar preservá-las.'))return;
   if(loading&&id==='groups')clearGroup();else if(loading)throw Error('Aguarde o carregamento do grupo.');
   closeModal(true);dirty=false;if(isPublisher()){ui.person=ownPerson().id;ui.reportScope='all';}ui.tab=id;render();window.scrollTo({top:0,behavior:'instant'});
-  if(id==='users')await loadUsers();if(id==='reviews')await loadRevisions();if(isPublisher()&&id==='my-card')loadOwnHours();return;
+  if(id==='users')await loadUsers();if(id==='reviews')await loadRevisions();if(isPublisher()&&id==='my-card'){loadOwnHours();loadOwnTimer();}return;
 }
 if(loading)throw Error('Aguarde o carregamento do grupo.');
 if(isPublisher()){
-  ownPerson();const allowed=['own-report','own-hours-edit','own-hours-submit','own-hours-refresh','person-annual','report-mode','pdf','report-copy','report-share','prev-month','next-month'];
+  ownPerson();const allowed=['own-report','own-hours-edit','own-hours-submit','own-hours-refresh','own-timer-start','own-timer-pause','own-timer-resume','own-timer-stop','own-timer-discard','own-timer-review','own-timer-refresh','person-annual','report-mode','pdf','report-copy','report-share','prev-month','next-month'];
   if(!allowed.includes(action))throw Error('Esta ação não está disponível no seu cartão.');if(action==='prev-month'||action==='next-month')return changeMonth(C.addMonth(ui.month,action==='prev-month'?-1:1));
 }else requireManager();
 if(action==='group-new')return newGroupForm();if(action==='users-refresh')return loadUsers();if(action==='user-new')return userForm();if(action==='user-assign')return userForm(id);
-requireData();const safe=['person-annual','filter','people-filter','go-month-report','report-mode','pdf','report-copy','report-share','backup','help','revisions-refresh','revision-review','own-hours-refresh'];
+requireData();const safe=['person-annual','filter','people-filter','go-month-report','report-mode','pdf','report-copy','report-share','backup','help','revisions-refresh','revision-review','own-hours-refresh','own-timer-start','own-timer-pause','own-timer-resume','own-timer-stop','own-timer-discard','own-timer-review','own-timer-refresh'];
 if(blocked&&!safe.includes(action))throw Error('Recarregue seus dados antes de enviar ou editar novamente.');
 switch(action){
 
@@ -481,6 +572,13 @@ const person=state.people.find(p=>p.id===id);if(!person||(isPublisher()&&person.
 if(dirty&&!confirm('Descartar as alterações não salvas para abrir o relatório anual?'))break;
 closeModal(true);ui.tab='reports';ui.reportMode='annual';ui.person=person.id;ui.reportScope=isPublisher()?'all':ui.reportScope;ui.year=Math.min(2198,Math.max(1900,Number(ui.month.slice(0,4))));ui.cycle='civil';render();window.scrollTo({top:0,behavior:'instant'});break;
 }
+case 'own-timer-start':await changeOwnTimer('start');break;
+case 'own-timer-pause':await changeOwnTimer('pause');break;
+case 'own-timer-resume':await changeOwnTimer('resume');break;
+case 'own-timer-stop':await changeOwnTimer('stop');break;
+case 'own-timer-discard':await changeOwnTimer('discard');break;
+case 'own-timer-review':ownTimerForm();break;
+case 'own-timer-refresh':if(dirty&&!confirm('Descartar as alterações ainda não salvas para atualizar o cronômetro e o diário?'))break;closeModal(true);await Promise.allSettled([loadOwnTimer(),loadOwnHours()]);break;
 case 'own-report':ownReportForm();break;
 case 'own-hours-edit':ownHoursForm(id);break;
 case 'own-hours-submit':ownReportForm({useDiary:true});break;
@@ -527,8 +625,8 @@ if(id==='group-selector'){try{await selectGroup(v);}finally{const selector=$('#g
 $('#modal').addEventListener('cancel',e=>{e.preventDefault();closeModal();});
 $('#import-file').addEventListener('change',async e=>{if(!isManager()||!state||!account||!selectedGroup||saving||adminBusy||blocked)return;const file=e.target.files[0];e.target.value='';if(!file)return;const token=scope(),owner=account.id,groupId=selectedGroup.id;try{if(file.size>12*1024*1024)throw Error('Arquivo muito grande. Limite: 12 MB.');const raw=await file.text();if(token!==scope()||owner!==account?.id||groupId!==selectedGroup?.id||!state||saving||blocked)return;const incoming=C.parseBackup(raw);confirmImport(incoming);}catch(err){if(token===scope())toast(err.message,true);}});
 window.addEventListener('beforeunload',e=>{if(saving||adminBusy||failedCandidate||dirty){e.preventDefault();e.returnValue='';}});
-window.addEventListener('focus',autoRefresh);
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')autoRefresh();});
+window.addEventListener('focus',()=>{if(isPublisher()&&state&&!saving&&!adminBusy)loadOwnTimer({quiet:true});autoRefresh();});
+document.addEventListener('visibilitychange',()=>{syncTimerTick();if(document.visibilityState==='visible'){if(isPublisher()&&state&&!saving&&!adminBusy)loadOwnTimer({quiet:true});autoRefresh();}});
 window.EmDiaApp={getState:()=>state&&account&&selectedGroup?C.clone(state):null,reportSpec:()=>state&&account&&selectedGroup?reportSpec():null,getUI:()=>({...ui}),getGroups:()=>account&&profileData?C.clone(groupList):[],getSelectedGroup:()=>selectedGroup?{...selectedGroup}:null,getProfile:()=>profileData?{...profileData}:null,getCloudStatus:()=>({phase:cloudPhase,saving,loading,blocked,revision:cloudRevision,adminBusy})};
 render();initializeCloud();
 })();

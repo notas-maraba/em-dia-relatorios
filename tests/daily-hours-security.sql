@@ -57,7 +57,7 @@ begin
   assert not em_dia_private.valid_daily_entries('2024-02','{"2024-02-01":0.5}'::jsonb);
   assert not em_dia_private.valid_daily_entries('2024-02','{"2024-02-01":"60"}'::jsonb);
   assert not em_dia_private.valid_daily_entries('2024-02','{"2024-02-01":null}'::jsonb);
-  assert not em_dia_private.valid_daily_entries('2024-02','{"2024-02-01":1441}'::jsonb);
+  assert not em_dia_private.valid_daily_entries('2024-02','{"2024-02-01":44641}'::jsonb);
   assert not em_dia_private.valid_daily_entries('2024-02','{"__proto__":1}'::jsonb);
 
   insert into auth.users(id,email,role,aud,created_at,updated_at)
@@ -118,9 +118,9 @@ begin
   perform pg_temp.expect_daily_error('select public.save_em_dia_own_hours(''2024-02-30'',60,0)','22023');
   perform pg_temp.expect_daily_error(format('select public.save_em_dia_own_hours(%L,60,0)',v_future_day),'22023');
   perform pg_temp.expect_daily_error(format('select public.save_em_dia_own_hours(%L,-1,0)',v_month||'-01'),'22023');
-  perform pg_temp.expect_daily_error(format('select public.save_em_dia_own_hours(%L,1441,0)',v_month||'-01'),'22023');
+  perform pg_temp.expect_daily_error(format('select public.save_em_dia_own_hours(%L,44641,0)',v_month||'-01'),'22023');
   perform pg_temp.expect_daily_error(format('select public.save_em_dia_own_hours(%L,60,-1)',v_month||'-01'),'22023');
-  -- A real leap day and a full 24-hour boundary are valid, but remain drafts.
+  -- A real leap day and a 24-hour example are valid, but remain drafts.
   v_result:=public.save_em_dia_own_hours('2024-02-29',1440,0);
   assert (v_result->>'total_minutes')::integer=1440;
   assert (v_result->>'version')::bigint=1;

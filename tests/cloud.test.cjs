@@ -528,7 +528,7 @@ test('diário próprio usa somente RPC e descarta metadados extras sem compartil
   const result = await Cloud.create({client: m.client}).readOwnHours('2026-10');
   assert.deepEqual(result, {groupId: group.id, personId: 'p1', month: '2026-10', kind: 'regular',
     entries: {'2026-10-01': 90, '2026-10-02': 0}, version: 2, totalMinutes: 90, closed: true, today: '2026-11-05', updatedAt: null,
-    launches: [{id: launchId(1), date: '2026-10-01', minutes: 90}, {id: launchId(2), date: '2026-10-02', minutes: 0}]});
+    launches: [{id: launchId(1), date: '2026-10-01', minutes: 90, note: ''}, {id: launchId(2), date: '2026-10-02', minutes: 0, note: ''}]});
   result.entries['2026-10-01'] = 500;
   assert.equal(diary.entries['2026-10-01'], 90);
   assert(!JSON.stringify(result).includes('Do not return'));
@@ -567,7 +567,7 @@ test('diário rejeita identidade ou mês de outra consulta antes de devolver dad
 
 test('datas impossíveis, fora do mês ou futuras e valores de minutos inválidos não entram no diário lido', async () => {
   const cases = [
-    {entries: {'2026-10-32': 90}}, {entries: {'2026-09-30': 90}}, {entries: {'2026-10-01': 1441}},
+    {entries: {'2026-10-32': 90}}, {entries: {'2026-09-30': 90}}, {entries: {'2026-10-01': 44641}},
     {entries: {'2026-10-01': -1}}, {entries: {'2026-10-01': 1.5}}, {entries: {'2026-10-01': '90'}},
     {entries: {'2026-10-01': null}}, {entries: []}, {entries: {'2026-10-01': 90}, total_minutes: 91},
     {month: '2026-11', entries: {'2026-11-06': 90}, closed: false},
@@ -616,7 +616,7 @@ test('validação de data real, minutos inteiros e versão ocorre antes de chama
   for (const date of ['2026-02-29', '2026-04-31', '2026-10-00', '2026-10-32', '2026-1-01', '2200-01-01', null]) {
     await assert.rejects(api.saveOwnHours({date, minutes: 0, expectedVersion: 0}), error => error.code === 'invalid_date');
   }
-  for (const minutes of [-1, 1441, 0.5, NaN, Infinity, '60', undefined, true]) {
+  for (const minutes of [-1, 44641, 0.5, NaN, Infinity, '60', undefined, true]) {
     await assert.rejects(api.saveOwnHours({date: '2026-10-01', minutes, expectedVersion: 0}), error => error.code === 'invalid_minutes');
   }
   for (const version of [-1, '0', Number.MAX_SAFE_INTEGER, 1.5, null]) {
@@ -655,7 +655,8 @@ test('falha de rede, conflito e rejeição de dia futuro nunca repetem gravaçã
 test('envio do diário usa as duas versões e somente participação e estudos sem receber horas do cliente', async () => {
   const m = mock({role: 'publisher', rpcResults: {submit_em_dia_own_hours: {data: hoursSubmitRow({private_note: 'Do not return'}), error: null}}});
   const result = await Cloud.create({client: m.client}).submitOwnHours({month: '2026-10', participated: true, studies: 0,
-    expectedHoursVersion: 2, expectedReportVersion: 0, hours: 99, totalMinutes: 999, groupId: otherGroupId, personId: 'p2'});
+    expectedHoursVersion: 2, expectedReportVersion: 0, hours: 99, totalMinutes: 999, groupId: otherGroupId, personId: 'p2',
+    note: 'Private diary fixture', launches: [{note: 'Private diary fixture'}]});
   assert.deepEqual(result, {status: 'accepted', version: 1, groupId: group.id, personId: 'p1', month: '2026-10', revision: 5,
     unchanged: false, hoursVersion: 2, totalMinutes: 90});
   assert.deepEqual(operationCalls(m.calls), [['rpc', 'submit_em_dia_own_hours', {p_month: '2026-10', p_participated: true,
@@ -725,7 +726,7 @@ test('vários lançamentos no mesmo dia preservam itens separados e agregado di�
   const result = await Cloud.create({client: m.client}).readOwnHours('2026-10');
   assert.deepEqual(result.entries, {'2026-10-03': 100, '2026-10-04': 0});
   assert.equal(result.totalMinutes, 100); assert.equal(result.launches.length, 3);
-  assert.deepEqual(result.launches[0], {id: launchId(1), date: '2026-10-03', minutes: 35});
+  assert.deepEqual(result.launches[0], {id: launchId(1), date: '2026-10-03', minutes: 35, note: ''});
   result.launches[0].minutes = 99;
   assert.equal(raw.launches[0].minutes, 35);
   assert(!JSON.stringify(result).includes('private fixture'));
@@ -757,7 +758,7 @@ test('agregado do dia deve corresponder a todos os lançamentos sem perder dias 
 
 test('cada lançamento precisa ter data real do mês, não futura e minutos inteiros válidos', async () => {
   for (const changes of [{date: '2026-02-29'}, {date: '2026-09-30'}, {date: '2026-10-32'},
-    {minutes: 0.5}, {minutes: -1}, {minutes: 1441}, {minutes: '90'}, {minutes: null}]) {
+    {minutes: 0.5}, {minutes: -1}, {minutes: 44641}, {minutes: '90'}, {minutes: null}]) {
     const raw = hoursRow({launches: [{id: launchId(1), date: '2026-10-01', minutes: 90, ...changes},
       {id: launchId(2), date: '2026-10-02', minutes: 0}]});
     const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_hour_launches: {data: raw, error: null}}});
@@ -768,18 +769,17 @@ test('cada lançamento precisa ter data real do mês, não futura e minutos inte
   await assert.rejects(Cloud.create({client: m.client}).readOwnHours('2026-11'), error => error.code === 'invalid_response');
 });
 
-test('o limite diário considera a soma dos lançamentos e não impõe um teto de 50 horas mensais', async () => {
-  const invalid = launchesRow([{id: launchId(1), date: '2026-10-01', minutes: 1000}, {id: launchId(2), date: '2026-10-01', minutes: 500}]);
+test('limite mensal de 744 horas preserva horas acumuladas acima de 24 no dia e de 50 no mês', async () => {
+  const invalid = launchesRow([{id: launchId(1), date: '2026-10-01', minutes: 30000}, {id: launchId(2), date: '2026-10-02', minutes: 15000}]);
   const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_hour_launches: {data: invalid, error: null}}});
   await assert.rejects(Cloud.create({client: m.client}).readOwnHours('2026-10'), error => error.code === 'invalid_response');
   const launches = [
-    {id: launchId(1), date: '2026-10-01', minutes: 1200},
-    {id: launchId(2), date: '2026-10-02', minutes: 1200},
-    {id: launchId(3), date: '2026-10-03', minutes: 900}
+    {id: launchId(1), date: '2026-10-01', minutes: 1800},
+    {id: launchId(2), date: '2026-10-01', minutes: 1500}
   ];
-  const valid = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch: {data: launchesRow(launches, {version: 3, unchanged: false}), error: null}}});
-  const saved = await Cloud.create({client: valid.client}).saveOwnHoursLaunch({id: launchId(3), date: '2026-10-03', minutes: 900, expectedVersion: 2});
-  assert.equal(saved.totalMinutes, 3300); assert.equal(saved.launches.length, 3);
+  const valid = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow(launches, {version: 3, unchanged: false}), error: null}}});
+  const saved = await Cloud.create({client: valid.client}).saveOwnHoursLaunch({id: launchId(2), date: '2026-10-01', minutes: 1500, expectedVersion: 2});
+  assert.equal(saved.totalMinutes, 3300); assert.equal(saved.entries['2026-10-01'], 3300); assert.equal(saved.launches.length, 2);
 });
 
 test('lista de lançamentos tem tamanho limitado e não aceita payload desproporcional', async () => {
@@ -791,23 +791,23 @@ test('lista de lançamentos tem tamanho limitado e não aceita payload despropor
   }
 });
 
-test('salvar um novo item no mesmo dia envia só UUID, data, minutos e versão mensal', async () => {
+test('salvar um novo item no mesmo dia envia só UUID, data, minutos, observação e versão mensal', async () => {
   const launches = [{id: launchId(1), date: '2026-10-01', minutes: 40}, {id: launchId(2), date: '2026-10-01', minutes: 35}];
-  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch: {data: launchesRow(launches, {version: 2, unchanged: false}), error: null}}});
+  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow(launches, {version: 2, unchanged: false}), error: null}}});
   const saved = await Cloud.create({client: m.client}).saveOwnHoursLaunch({id: launchId(2), date: '2026-10-01', minutes: 35, expectedVersion: 1,
     groupId: otherGroupId, personId: 'p2', entries: {'2026-10-01': 999}, totalMinutes: 999, kind: 'publisher'});
   assert.equal(saved.entries['2026-10-01'], 75); assert.equal(saved.launches.length, 2);
-  assert.deepEqual(operationCalls(m.calls), [['rpc', 'save_em_dia_own_hour_launch', {p_id: launchId(2), p_date: '2026-10-01', p_minutes: 35, p_expected_version: 1}]]);
+  assert.deepEqual(operationCalls(m.calls), [['rpc', 'save_em_dia_own_hour_launch_note', {p_id: launchId(2), p_date: '2026-10-01', p_minutes: 35, p_note: null, p_expected_version: 1}]]);
   assert(!m.calls.some(call => call.table));
 });
 
 test('edição e remoção confirmam o item individual sem exigir remover os demais do mesmo dia', async () => {
-  const edited = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch: {data: launchesRow([
+  const edited = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow([
     {id: launchId(1), date: '2026-10-01', minutes: 40}, {id: launchId(2), date: '2026-10-01', minutes: 20}
   ], {version: 3, unchanged: false}), error: null}}});
   const changed = await Cloud.create({client: edited.client}).saveOwnHoursLaunch({id: launchId(2), date: '2026-10-01', minutes: 20, expectedVersion: 2});
   assert.equal(changed.totalMinutes, 60); assert.equal(changed.launches[0].minutes, 40);
-  const removed = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch: {data: launchesRow([
+  const removed = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow([
     {id: launchId(1), date: '2026-10-01', minutes: 40}
   ], {version: 4, unchanged: false}), error: null}}});
   const result = await Cloud.create({client: removed.client}).saveOwnHoursLaunch({id: launchId(2), date: '2026-10-01', minutes: null, expectedVersion: 3});
@@ -815,22 +815,22 @@ test('edição e remoção confirmam o item individual sem exigir remover os dem
 });
 
 test('zero permanece lançamento individual explícito e uma remoção pode esvaziar o diário', async () => {
-  const zero = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch: {data: launchesRow([
+  const zero = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow([
     {id: launchId(1), date: '2026-10-01', minutes: 0}
   ], {version: 1, unchanged: false}), error: null}}});
   const saved = await Cloud.create({client: zero.client}).saveOwnHoursLaunch({id: launchId(1), date: '2026-10-01', minutes: 0, expectedVersion: 0});
   assert.equal(saved.entries['2026-10-01'], 0); assert.equal(saved.launches.length, 1);
-  const removal = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch: {data: launchesRow([], {version: 2, unchanged: false}), error: null}}});
+  const removal = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow([], {version: 2, unchanged: false}), error: null}}});
   const removed = await Cloud.create({client: removal.client}).saveOwnHoursLaunch({id: launchId(1), date: '2026-10-01', minutes: null, expectedVersion: 1});
   assert.deepEqual(removed.entries, {}); assert.deepEqual(removed.launches, []); assert.equal(removed.version, 2);
 });
 
 test('UUID estável confirma retry idêntico sem duplicar lançamento nem repetir chamada', async () => {
   const row = launchesRow([{id: launchId(1), date: '2026-10-01', minutes: 45}], {version: 1, unchanged: true});
-  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch: {data: row, error: null}}});
+  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: row, error: null}}});
   const saved = await Cloud.create({client: m.client}).saveOwnHoursLaunch({id: launchId(1), date: '2026-10-01', minutes: 45, expectedVersion: 0});
   assert(saved.unchanged); assert.equal(saved.launches.length, 1); assert.equal(operationCalls(m.calls).length, 1);
-  const empty = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch: {data: launchesRow([], {version: 2, unchanged: true}), error: null}}});
+  const empty = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow([], {version: 2, unchanged: true}), error: null}}});
   assert((await Cloud.create({client: empty.client}).saveOwnHoursLaunch({id: launchId(1), date: '2026-10-01', minutes: null, expectedVersion: 1})).unchanged);
 });
 
@@ -843,10 +843,10 @@ test('confirmação nova não pode esconder o item pedido nem mudar sua data, va
   ]) {
     const {launches = [requested], ...metadata} = changes;
     const row = launchesRow(launches, {version: 3, unchanged: false, ...metadata});
-    const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch: {data: row, error: null}}});
+    const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: row, error: null}}});
     await assert.rejects(Cloud.create({client: m.client}).saveOwnHoursLaunch({...requested, expectedVersion: 2}), error => error.code === 'invalid_response');
   }
-  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch: {data: launchesRow([requested], {version: 3, unchanged: false}), error: null}}});
+  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow([requested], {version: 3, unchanged: false}), error: null}}});
   await assert.rejects(Cloud.create({client: m.client}).saveOwnHoursLaunch({...requested, minutes: null, expectedVersion: 2}), error => error.code === 'invalid_response');
 });
 
@@ -855,7 +855,7 @@ test('UUID, calendário, minutos e versão do item são validados antes da rede'
   const args = {id: launchId(1), date: '2026-10-01', minutes: 30, expectedVersion: 0};
   for (const id of ['', null, 'invalid', '__proto__', 1]) await assert.rejects(api.saveOwnHoursLaunch({...args, id}), error => error.code === 'invalid_launch');
   for (const date of ['2026-02-29', '2026-04-31', null]) await assert.rejects(api.saveOwnHoursLaunch({...args, date}), error => error.code === 'invalid_date');
-  for (const minutes of [-1, 1441, 1.5, '30', NaN, undefined]) await assert.rejects(api.saveOwnHoursLaunch({...args, minutes}), error => error.code === 'invalid_minutes');
+  for (const minutes of [-1, 44641, 1.5, '30', NaN, undefined]) await assert.rejects(api.saveOwnHoursLaunch({...args, minutes}), error => error.code === 'invalid_minutes');
   for (const expectedVersion of [-1, null, '0', Number.MAX_SAFE_INTEGER]) await assert.rejects(api.saveOwnHoursLaunch({...args, expectedVersion}), error => error.code === 'invalid_revision');
   assert.equal(m.calls.length, 0);
 });
@@ -870,7 +870,7 @@ test('somente a conta de publicador verificada pode salvar um lançamento indivi
 
 test('falhas de transporte, escopo ou CAS não repetem o lançamento nem exibem detalhes do servidor', async () => {
   for (const options of [{rpcThrow: Error('PRIVATE_FIXTURE_DETAILS')}, ...['40001', '42501', '22023'].map(code =>
-    ({rpcResults: {save_em_dia_own_hour_launch: {data: null, error: {code, message: 'PRIVATE_FIXTURE_DETAILS'}}}}))]) {
+    ({rpcResults: {save_em_dia_own_hour_launch_note: {data: null, error: {code, message: 'PRIVATE_FIXTURE_DETAILS'}}}}))]) {
     const m = mock({role: 'publisher', ...options});
     await assert.rejects(Cloud.create({client: m.client}).saveOwnHoursLaunch({id: launchId(1), date: '2026-10-01', minutes: 30, expectedVersion: 0}),
       error => error instanceof Cloud.CloudError && !error.message.includes('PRIVATE_FIXTURE_DETAILS'));
@@ -880,9 +880,301 @@ test('falhas de transporte, escopo ou CAS não repetem o lançamento nem exibem 
 
 test('UUIDs de resposta e entrada são normalizados antes de confirmar o mesmo item', async () => {
   const id = '20000000-0000-4000-8000-00000000000A';
-  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch: {data: launchesRow([
+  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow([
     {id, date: '2026-10-01', minutes: 25}
   ], {version: 1, unchanged: false}), error: null}}});
   const saved = await Cloud.create({client: m.client}).saveOwnHoursLaunch({id, date: '2026-10-01', minutes: 25, expectedVersion: 0});
   assert.equal(saved.launches[0].id, id.toLowerCase()); assert.equal(operationCalls(m.calls)[0][2].p_id, id.toLowerCase());
+});
+
+test('diário próprio preserva observação opcional exata, descarta campos extras e não compartilha objetos', async () => {
+  const note = '  Observação de fixture\ncom <texto> e acentuação  ';
+  const raw = launchesRow([{id: launchId(1), date: '2026-10-01', minutes: 1800, note, internal: 'Discard fixture'}]);
+  const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_hour_launches: {data: raw, error: null}}});
+  const result = await Cloud.create({client: m.client}).readOwnHours('2026-10');
+  assert.deepEqual(result.launches[0], {id: launchId(1), date: '2026-10-01', minutes: 1800, note});
+  result.launches[0].note = 'changed fixture';
+  assert.equal(raw.launches[0].note, note);
+  assert(!JSON.stringify(result).includes('Discard fixture'));
+  assert.deepEqual(operationCalls(m.calls), [['rpc', 'read_em_dia_own_hour_launches', {p_month: '2026-10'}]]);
+});
+
+test('leitura aceita observações vazias e de 1000 caracteres mas rejeita tipos ou tamanhos inválidos', async () => {
+  for (const note of ['', 'x'.repeat(1000)]) {
+    const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_hour_launches: {data: launchesRow([
+      {id: launchId(1), date: '2026-10-01', minutes: 0, note}
+    ]), error: null}}});
+    assert.equal((await Cloud.create({client: m.client}).readOwnHours('2026-10')).launches[0].note, note);
+  }
+  for (const note of [null, 1, false, {}, [], 'x'.repeat(1001)]) {
+    const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_hour_launches: {data: launchesRow([
+      {id: launchId(1), date: '2026-10-01', minutes: 0, note}
+    ]), error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).readOwnHours('2026-10'), error => error.code === 'invalid_response');
+  }
+});
+
+test('limite de payload considera bytes UTF-8 das observações antes de aceitar a lista', async () => {
+  const launches = Array.from({length: 100}, (_, index) => ({id: launchId(index + 1), date: '2026-10-01', minutes: 0, note: '界'.repeat(1000)}));
+  assert(JSON.stringify(launches).length < 262144);
+  assert(Buffer.byteLength(JSON.stringify(launches), 'utf8') > 262144);
+  const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_hour_launches: {data: launchesRow(launches), error: null}}});
+  await assert.rejects(Cloud.create({client: m.client}).readOwnHours('2026-10'), error => error.code === 'invalid_response');
+});
+
+test('observação explícita usa RPC próprio e pode ser a única alteração do lançamento', async () => {
+  const note = '  Fixture com espaço preservado  ', item = {id: launchId(1), date: '2026-10-01', minutes: 1800, note};
+  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow([item], {version: 3, unchanged: false}), error: null}}});
+  const result = await Cloud.create({client: m.client}).saveOwnHoursLaunch({...item, expectedVersion: 2});
+  assert.equal(result.launches[0].note, note); assert.equal(result.totalMinutes, 1800);
+  assert.deepEqual(operationCalls(m.calls), [['rpc', 'save_em_dia_own_hour_launch_note', {p_id: item.id, p_date: item.date,
+    p_minutes: item.minutes, p_note: note, p_expected_version: 2}]]);
+});
+
+test('observação nula preserva o texto retornado e vazia confirma limpeza explícita', async () => {
+  const item = {id: launchId(1), date: '2026-10-01', minutes: 30};
+  for (const note of [null, '']) {
+    const returned = note === null ? 'Existing fixture note' : '';
+    const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow([{...item, note: returned}], {version: 3, unchanged: false}), error: null}}});
+    const saved = await Cloud.create({client: m.client}).saveOwnHoursLaunch({...item, note, expectedVersion: 2});
+    assert.equal(saved.launches[0].note, returned); assert.equal(operationCalls(m.calls)[0][2].p_note, note);
+  }
+  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow([], {version: 3, unchanged: false}), error: null}}});
+  assert.equal((await Cloud.create({client: m.client}).saveOwnHoursLaunch({...item, minutes: null, note: null, expectedVersion: 2})).launches.length, 0);
+  assert.equal(operationCalls(m.calls)[0][2].p_note, null);
+});
+
+test('observação repetida com mesmo UUID confirma retry idêntico sem nova tentativa', async () => {
+  const item = {id: launchId(1), date: '2026-10-01', minutes: 30, note: 'x'.repeat(1000)};
+  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow([item], {version: 3, unchanged: true}), error: null}}});
+  const saved = await Cloud.create({client: m.client}).saveOwnHoursLaunch({...item, expectedVersion: 2});
+  assert(saved.unchanged); assert.equal(saved.launches[0].note, item.note); assert.equal(operationCalls(m.calls).length, 1);
+});
+
+test('confirmação exige observação explicitamente pedida inclusive quando ela é vazia', async () => {
+  const item = {id: launchId(1), date: '2026-10-01', minutes: 30};
+  for (const note of ['', 'Requested fixture note']) {
+    const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hour_launch_note: {data: launchesRow([{...item, note: 'Different fixture note'}], {version: 3, unchanged: false}), error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).saveOwnHoursLaunch({...item, note, expectedVersion: 2}), error => error.code === 'invalid_response');
+  }
+});
+
+test('observação inválida é rejeitada antes do SDK sem reter seu conteúdo no erro', async () => {
+  const m = mock({role: 'publisher'}), api = Cloud.create({client: m.client});
+  for (const note of [1, true, {}, [], 'PRIVATE_FIXTURE'.repeat(100)]) {
+    await assert.rejects(api.saveOwnHoursLaunch({id: launchId(1), date: '2026-10-01', minutes: 30, note, expectedVersion: 0}),
+      error => error.code === 'invalid_note' && !JSON.stringify(error).includes('PRIVATE_FIXTURE') && !error.message.includes('PRIVATE_FIXTURE') && !Object.hasOwn(error, 'cause'));
+  }
+  assert.equal(m.calls.length, 0);
+});
+
+test('exceções do diário não retêm observação em mensagem, código, causa ou resposta bruta', async () => {
+  const marker = 'PRIVATE_DIARY_FIXTURE', error = Object.assign(new Error(marker), {code: marker, request: {note: marker}});
+  for (const action of ['read', 'save']) {
+    const m = mock({role: 'publisher', rpcThrow: error}), api = Cloud.create({client: m.client});
+    await assert.rejects(action === 'read' ? api.readOwnHours('2026-10') : api.saveOwnHoursLaunch({id: launchId(1),
+      date: '2026-10-01', minutes: 30, note: marker, expectedVersion: 0}), thrown => {
+      assert(thrown instanceof Cloud.CloudError); assert.equal(thrown.code, 'network_error');
+      assert(!Object.hasOwn(thrown, 'cause')); assert(!JSON.stringify(thrown).includes(marker)); assert(!thrown.message.includes(marker));
+      return true;
+    });
+    assert.equal(operationCalls(m.calls).length, 1);
+  }
+});
+
+test('744 horas acumuladas em fevereiro podem ser lidas, salvas no legado e enviadas sem notas', async () => {
+  const row = hoursRow({month: '2026-02', entries: {'2026-02-01': 44640}, total_minutes: 44640, version: 3, unchanged: false});
+  const m = mock({role: 'publisher', rpcResults: {
+    read_em_dia_own_hour_launches: {data: row, error: null},
+    save_em_dia_own_hours: {data: row, error: null},
+    submit_em_dia_own_hours: {data: hoursSubmitRow({month: '2026-02', total_minutes: 44640}), error: null}
+  }}), api = Cloud.create({client: m.client});
+  assert.equal((await api.readOwnHours('2026-02')).totalMinutes, 44640);
+  const saved = await api.saveOwnHours({date: '2026-02-01', minutes: 44640, expectedVersion: 2});
+  assert.equal(saved.totalMinutes, 44640); assert(!Object.hasOwn(saved, 'launches')); assert(!Object.hasOwn(saved, 'note'));
+  assert.equal((await api.submitOwnHours({month: '2026-02', participated: true, studies: 0, expectedHoursVersion: 2, expectedReportVersion: 0})).totalMinutes, 44640);
+});
+
+const timerId = launchId(90), timerLaunchId = launchId(91);
+function timerRow(status = 'idle', changes = {}) {
+  const active = status !== 'idle';
+  return {group_id: group.id, person_id: 'p1', timer_id: active ? timerId : null, status,
+    version: active ? 5 : 0, start_date: active ? '2026-11-05' : null,
+    started_at: active ? '2026-11-05T12:59:00.000Z' : null,
+    anchor_at: status === 'running' ? '2026-11-05T13:00:00.000Z' : null,
+    stopped_at: status === 'stopped' ? '2026-11-05T13:00:15.000Z' : null,
+    accumulated_ms: status === 'running' ? 60000 : active ? 90000 : 0,
+    elapsed_ms: active ? 90000 : 0, server_now: '2026-11-05T13:00:30.000Z', ...changes};
+}
+function timerPostRow(changes = {}) {
+  return {timer: timerRow('idle', {version: 6}),
+    diary: launchesRow([{id: timerLaunchId, date: '2026-10-01', minutes: 1800, note: 'Timer fixture'}], {version: 3}),
+    launch_id: timerLaunchId, unchanged: false,
+    receipt: {timer_id: timerId, launch_id: timerLaunchId, date: '2026-10-01', minutes: 1800,
+      note: 'Timer fixture', posted_at: '2026-11-05T13:00:20.000Z'}, ...changes};
+}
+const timerPostInput = () => ({timerId, expectedTimerVersion: 5, launchId: timerLaunchId, date: '2026-10-01',
+  minutes: 1800, note: 'Timer fixture', expectedHoursVersion: 2});
+
+test('cronômetro próprio usa somente RPC e descarta recibos e metadados extras da leitura', async () => {
+  const raw = timerRow('running', {receipt: {note: 'Private discarded fixture'}, user_id: 'Discarded fixture'});
+  const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_timer: {data: raw, error: null}}});
+  const result = await Cloud.create({client: m.client}).readOwnTimer();
+  assert.deepEqual(result, {groupId: group.id, personId: 'p1', timerId, status: 'running', version: 5,
+    startDate: '2026-11-05', startedAt: '2026-11-05T12:59:00.000Z', anchorAt: '2026-11-05T13:00:00.000Z',
+    stoppedAt: null, accumulatedMs: 60000, elapsedMs: 90000, serverNow: '2026-11-05T13:00:30.000Z'});
+  assert(!JSON.stringify(result).includes('fixture'));
+  assert.deepEqual(operationCalls(m.calls), [['rpc', 'read_em_dia_own_timer', undefined]]);
+  assert(!m.calls.some(call => call.table));
+});
+
+test('cronômetro aceita idle sem ciclo e duração persistente maior que 744 horas', async () => {
+  for (const row of [timerRow(), timerRow('idle', {version: 9}), timerRow('running', {
+    started_at: '2026-09-01T12:59:00.000Z', start_date: '2026-09-01', accumulated_ms: 4000000000, elapsed_ms: 4000030000
+  })]) {
+    const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_timer: {data: row, error: null}}});
+    assert.equal((await Cloud.create({client: m.client}).readOwnTimer()).elapsedMs, row.elapsed_ms);
+  }
+});
+
+test('cronômetro aceita precisão de microssegundos do Postgres e tolera truncamento de um milissegundo', async () => {
+  const row = timerRow('running', {anchor_at: '2026-11-05T13:00:00.000999+00:00',
+    server_now: '2026-11-05T13:00:30.000001+00:00', elapsed_ms: 89999});
+  const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_timer: {data: row, error: null}}});
+  assert.equal((await Cloud.create({client: m.client}).readOwnTimer()).elapsedMs, 89999);
+});
+
+test('cronômetro rejeita escopo alheio, relógios incoerentes e combinações inválidas de estado', async () => {
+  const cases = [timerRow('running', {group_id: otherGroupId}), timerRow('running', {person_id: 'p2'}),
+    timerRow('running', {timer_id: 'invalid'}), timerRow('running', {version: 0}), timerRow('running', {status: 'unknown'}),
+    timerRow('idle', {elapsed_ms: 1}), timerRow('idle', {timer_id: timerId}), timerRow('idle', {started_at: '2026-11-05T13:00:00Z'}),
+    timerRow('running', {elapsed_ms: -1}), timerRow('running', {elapsed_ms: '90000'}), timerRow('running', {accumulated_ms: 0.5}),
+    timerRow('running', {elapsed_ms: 89990}), timerRow('running', {anchor_at: null}),
+    timerRow('running', {anchor_at: '2026-11-05T13:00:31Z'}), timerRow('running', {started_at: '2026-11-05T13:00:31Z'}),
+    timerRow('running', {server_now: '2026-02-30T13:00:30Z'}), timerRow('running', {server_now: 'PRIVATE_FIXTURE'}),
+    timerRow('running', {stopped_at: '2026-11-05T13:00:30Z'}), timerRow('paused', {anchor_at: '2026-11-05T13:00:00Z'}),
+    timerRow('paused', {elapsed_ms: 89999}), timerRow('paused', {stopped_at: '2026-11-05T13:00:15Z'}),
+    timerRow('stopped', {stopped_at: null}), timerRow('stopped', {stopped_at: '2026-11-05T12:58:00Z'})];
+  for (const row of cases) {
+    const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_timer: {data: row, error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).readOwnTimer(), error => error.code === 'invalid_response');
+  }
+});
+
+test('ações do cronômetro levam somente intenção, UUID estável e versão CAS', async () => {
+  const statuses = {start: 'running', pause: 'paused', resume: 'running', stop: 'stopped', discard: 'idle'};
+  for (const [action, status] of Object.entries(statuses)) {
+    const m = mock({role: 'publisher', rpcResults: {change_em_dia_own_timer: {data: timerRow(status, {version: 6, unchanged: false}), error: null}}});
+    const result = await Cloud.create({client: m.client}).changeOwnTimer({action, timerId, expectedVersion: 5,
+      elapsedMs: 1000000, groupId: otherGroupId, personId: 'p2', startedAt: 'ignored'});
+    assert.equal(result.status, status); assert.equal(result.version, 6);
+    assert.deepEqual(operationCalls(m.calls), [['rpc', 'change_em_dia_own_timer', {p_action: action, p_timer_id: timerId, p_expected_version: 5}]]);
+  }
+});
+
+test('retry de ação idêntica confirma estado e versão sem repetir chamada', async () => {
+  const m = mock({role: 'publisher', rpcResults: {change_em_dia_own_timer: {data: timerRow('paused', {version: 7, unchanged: true}), error: null}}});
+  const saved = await Cloud.create({client: m.client}).changeOwnTimer({action: 'pause', timerId, expectedVersion: 5});
+  assert(saved.unchanged); assert.equal(operationCalls(m.calls).length, 1);
+});
+
+test('ação inválida, UUID e versão falham antes de qualquer conexão do cronômetro', async () => {
+  const m = mock({role: 'publisher'}), api = Cloud.create({client: m.client});
+  for (const action of ['', null, 'reset', 'constructor', undefined, {toString: () => 'start'}]) await assert.rejects(api.changeOwnTimer({action, timerId, expectedVersion: 0}), error => error.code === 'invalid_timer_action');
+  await assert.rejects(api.changeOwnTimer({action: 'start', timerId: 'invalid', expectedVersion: 0}), error => error.code === 'invalid_launch');
+  await assert.rejects(api.changeOwnTimer({action: 'start', timerId, expectedVersion: -1}), error => error.code === 'invalid_revision');
+  assert.equal(m.calls.length, 0);
+});
+
+test('confirmação de ação recusa outro ciclo, outro estado e versão que não confirme CAS', async () => {
+  for (const row of [timerRow('running', {version: 6, unchanged: false}), timerRow('paused', {version: 6, unchanged: false, timer_id: launchId(92)}),
+    timerRow('paused', {version: 7, unchanged: false}), timerRow('paused', {version: 4, unchanged: true}), timerRow('paused', {version: 6})]) {
+    const m = mock({role: 'publisher', rpcResults: {change_em_dia_own_timer: {data: row, error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).changeOwnTimer({action: 'pause', timerId, expectedVersion: 5}), error => error.code === 'invalid_response');
+  }
+});
+
+test('lançamento do cronômetro envia duas versões e confirma recibo, diário e encerramento atômico', async () => {
+  const raw = timerPostRow({internal: 'Discarded fixture'}), m = mock({role: 'publisher', rpcResults: {post_em_dia_own_timer: {data: raw, error: null}}});
+  const result = await Cloud.create({client: m.client}).postOwnTimer({...timerPostInput(), groupId: otherGroupId, personId: 'p2', elapsedMs: 1});
+  assert.equal(result.timer.status, 'idle'); assert.equal(result.diary.totalMinutes, 1800); assert.equal(result.launchId, timerLaunchId);
+  assert.deepEqual(result.receipt, {timerId, launchId: timerLaunchId, date: '2026-10-01', minutes: 1800,
+    note: 'Timer fixture', postedAt: '2026-11-05T13:00:20.000Z'});
+  assert.deepEqual(operationCalls(m.calls), [['rpc', 'post_em_dia_own_timer', {p_timer_id: timerId, p_expected_timer_version: 5,
+    p_launch_id: timerLaunchId, p_date: '2026-10-01', p_minutes: 1800, p_note: 'Timer fixture', p_expected_hours_version: 2}]]);
+  assert(!JSON.stringify(result).includes('Discarded fixture'));
+});
+
+test('retry do post usa recibo exato sem exigir lançamento ainda presente ou apagar ciclo novo', async () => {
+  for (const launches of [[], [{id: timerLaunchId, date: '2026-10-01', minutes: 1, note: 'Later edited fixture'}]]) {
+    const raw = timerPostRow({unchanged: true, timer: timerRow('running', {version: 9, timer_id: launchId(92)}),
+      diary: launchesRow(launches, {version: 7})});
+    const m = mock({role: 'publisher', rpcResults: {post_em_dia_own_timer: {data: raw, error: null}}});
+    const result = await Cloud.create({client: m.client}).postOwnTimer(timerPostInput());
+    assert(result.unchanged); assert.equal(result.timer.timerId, launchId(92)); assert.equal(result.timer.status, 'running');
+    assert.equal(result.diary.launches.length, launches.length); assert.equal(operationCalls(m.calls).length, 1);
+  }
+});
+
+test('post normaliza nota ausente ou nula para string vazia e aceita total editado até 744 horas', async () => {
+  for (const note of [undefined, null, '']) {
+    const raw = timerPostRow({diary: launchesRow([{id: timerLaunchId, date: '2026-10-01', minutes: 44640, note: ''}], {version: 3}),
+      receipt: {...timerPostRow().receipt, minutes: 44640, note: ''}});
+    const m = mock({role: 'publisher', rpcResults: {post_em_dia_own_timer: {data: raw, error: null}}});
+    assert.equal((await Cloud.create({client: m.client}).postOwnTimer({...timerPostInput(), minutes: 44640, note})).receipt.note, '');
+    assert.equal(operationCalls(m.calls)[0][2].p_note, '');
+  }
+});
+
+test('post rejeita insumos inválidos antes da rede', async () => {
+  const m = mock({role: 'publisher'}), api = Cloud.create({client: m.client});
+  for (const changes of [{timerId: null}, {launchId: 'invalid'}, {date: '2026-02-29'}, {minutes: -1}, {minutes: 44641},
+    {minutes: 1.5}, {minutes: null}, {note: 1}, {note: 'x'.repeat(1001)}, {expectedTimerVersion: 0}, {expectedHoursVersion: -1}]) {
+    await assert.rejects(api.postOwnTimer({...timerPostInput(), ...changes}), Cloud.CloudError);
+  }
+  assert.equal(m.calls.length, 0);
+});
+
+test('post confirma recibo exato mesmo em replay e recusa escrita parcial ou escopo alterado', async () => {
+  const base = timerPostRow();
+  const cases = [{receipt: undefined}, {receipt: {...base.receipt, timer_id: launchId(92)}},
+    {receipt: {...base.receipt, launch_id: launchId(92)}}, {receipt: {...base.receipt, date: '2026-10-02'}},
+    {receipt: {...base.receipt, minutes: 1}}, {receipt: {...base.receipt, note: 'Different fixture'}},
+    {receipt: {...base.receipt, posted_at: '2026-11-05T14:00:00Z'}}, {launch_id: launchId(92)}, {unchanged: undefined},
+    {timer: timerRow('paused', {version: 6})}, {timer: timerRow('idle', {version: 7})},
+    {timer: timerRow('idle', {version: 6, group_id: otherGroupId})},
+    {diary: launchesRow([], {version: 3})}, {diary: {...base.diary, version: 4}}, {diary: {...base.diary, person_id: 'p2'}},
+    {diary: launchesRow([{id: timerLaunchId, date: '2026-10-01', minutes: 1, note: 'Timer fixture'}], {version: 3})},
+    {unchanged: true, receipt: {...base.receipt, note: 'Different fixture'}},
+    {unchanged: true, timer: timerRow('idle', {version: 5})}, {unchanged: true, diary: {...base.diary, version: 2}}];
+  for (const changes of cases) {
+    const m = mock({role: 'publisher', rpcResults: {post_em_dia_own_timer: {data: timerPostRow(changes), error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).postOwnTimer(timerPostInput()), error => error.code === 'invalid_response');
+    assert.equal(operationCalls(m.calls).length, 1);
+  }
+});
+
+test('somente publisher verificado acessa, altera e lança o cronômetro próprio', async () => {
+  for (const options of [{role: 'admin'}, {role: 'superintendent'}, {noSession: true}]) {
+    const m = mock(options), api = Cloud.create({client: m.client});
+    await assert.rejects(api.readOwnTimer(), Cloud.CloudError);
+    await assert.rejects(api.changeOwnTimer({action: 'start', timerId, expectedVersion: 0}), Cloud.CloudError);
+    await assert.rejects(api.postOwnTimer(timerPostInput()), Cloud.CloudError);
+    assert.equal(operationCalls(m.calls).length, 0); assert(!m.calls.some(call => call.table));
+  }
+});
+
+test('cronômetro não repete chamadas após falha, CAS ou rejeição e não retém notas privadas nos erros', async () => {
+  const marker = 'PRIVATE_TIMER_FIXTURE';
+  for (const name of ['read_em_dia_own_timer', 'change_em_dia_own_timer', 'post_em_dia_own_timer']) {
+    for (const options of [{rpcThrow: Object.assign(new Error(marker), {code: marker, request: {note: marker}})},
+      ...['40001', '42501', '22023'].map(code => ({rpcResults: {[name]: {data: null, error: {code, details: marker, message: marker}}}}))]) {
+      const m = mock({role: 'publisher', ...options}), api = Cloud.create({client: m.client});
+      const result = name === 'read_em_dia_own_timer' ? api.readOwnTimer() : name === 'change_em_dia_own_timer'
+        ? api.changeOwnTimer({action: 'stop', timerId, expectedVersion: 5}) : api.postOwnTimer({...timerPostInput(), note: marker});
+      await assert.rejects(result, error => error instanceof Cloud.CloudError && !Object.hasOwn(error, 'cause') &&
+        !JSON.stringify(error).includes(marker) && !error.message.includes(marker));
+      assert.equal(operationCalls(m.calls).length, 1); assert(!m.calls.some(call => call.table));
+    }
+  }
 });

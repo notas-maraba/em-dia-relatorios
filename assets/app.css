@@ -199,9 +199,22 @@
   .hours-day-heading{justify-content:space-between;gap:5px 8px;margin-bottom:3px}
   .hours-day-heading>span{font-size:12px;color:var(--green)}
   .hours-launches{margin:0;padding:0;list-style:none}
-  .hours-launches>li{padding:4px 0}
+  .hours-launches>li{padding:4px 0;align-items:flex-start}
   .hours-launches .hours-launch-order{font-size:11px;font-weight:400;color:var(--muted)}
   .hours-launches li strong{font-size:14px}
+  .hours-launches .hours-launch-note{flex-basis:100%;max-width:100%;margin:0;font-size:12px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}
+  .hours-diary textarea,#hours-note{font-size:16px;min-width:0}
+  #hours-note,#timer-launch-note{min-height:72px}
+  .hours-timer{margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:12px;min-width:0}
+  .hours-timer.section-card{margin-top:0;padding:14px}
+  .hours-timer .section-title{gap:6px;flex-wrap:wrap;margin-bottom:6px}
+  .hours-timer .section-title h2{font-size:15px}
+  .hours-timer-clock{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px}
+  .hours-timer-clock>strong{font-size:27px;line-height:1.2;color:var(--green);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+  .hours-timer-clock>span{font-size:11px;color:var(--muted)}
+  .hours-timer-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .hours-timer-actions>.btn{min-height:44px;padding:8px 11px}
+  .hours-timer .help{margin-bottom:0}
   .hours-entry input{font-size:16px;min-width:0}
   .hours-send-total>span{display:block;font-size:12px}
   .hours-send-total>strong{display:block;font-size:26px;margin-top:4px;color:var(--green)}
