@@ -6,6 +6,8 @@ A versão 3 usa Supabase Auth e um banco privado organizado por grupos. O site p
 
 Ao entrar, o checklist abre diretamente no grupo vinculado à conta. Esse vínculo também define o grupo inicial de uma conta administradora. Somente a administração pode consultar outro grupo pelo seletor no topo; essa consulta não altera o grupo padrão. Cada grupo possui base e revisão próprias. Dois responsáveis vinculados ao mesmo grupo administram a mesma lista.
 
+Na aba Publicadores, o botão Anual em cada cartão abre o relatório individual do ano correspondente ao mês de referência. O histórico exibe os 12 meses, o tipo de publicador ou pioneiro, a entrega, a participação, as horas e os estudos informados. O ano e o período podem ser ajustados; a mesma consulta pode ser exportada em PDF ou texto. Relatório pendente, participação não informada e mês sem acompanhamento permanecem distintos de uma participação marcada como Não.
+
 Cada gravação compara a revisão esperada com a atual. Conflitos entre aparelhos exigem recarregar a base. Falhas de salvamento não são apresentadas como sucesso. A troca de grupo limpa a base anterior da interface antes de carregar a seguinte. Os relatórios ficam na memória da página e no banco; apenas a sessão de login é persistida pelo SDK.
 
 Dados da versão local anterior não são importados nem apagados silenciosamente. Exporte essa base e confira antes de substituir a base na nuvem. Importar um backup substitui os registros do grupo selecionado, sem mesclar. Mantenha backups JSON e PDFs em um lugar privado fora deste repositório.
