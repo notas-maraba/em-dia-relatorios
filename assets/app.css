@@ -165,3 +165,12 @@
   .person-card{padding:13px}.person-actions .btn{padding:10px;font-size:10.5px}
   .mobile-nav button{font-size:8.5px}
 }
+
+/* Administrative group browsing does not change the account's initial group. */
+@media screen{
+  .group-context-admin{align-items:flex-end;padding-bottom:12px;gap:10px}
+  .group-context-admin .field>label{font-size:11px;margin-bottom:5px;color:var(--muted)}
+  .group-context-admin .field select{min-height:44px;padding:9px 12px;font-weight:650}
+  .group-context-admin>.btn{max-width:112px;min-height:44px;white-space:normal;padding:8px 6px}
+  .group-context-admin>.btn svg{display:none}
+}

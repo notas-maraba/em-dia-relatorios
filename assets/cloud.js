@@ -112,7 +112,14 @@
         .eq('user_id', current.user.id).maybeSingle();
       if (result.error) throw result.error;
       if (result.data?.user_id !== current.user.id) throw new AccessDeniedError();
-      return {userId: current.user.id, isAdmin: result.data.is_admin === true};
+      // The assignment is also the administrator's default group. Consulting
+      // another group must never rewrite this server-controlled assignment.
+      const membership = await client.from('em_dia_group_members').select('user_id,group_id')
+        .eq('user_id', current.user.id).maybeSingle();
+      if (membership.error) throw membership.error;
+      if (membership.data !== null && membership.data?.user_id !== current.user.id) throw new AccessDeniedError();
+      const defaultGroupId = membership.data === null ? null : checkedGroupId(membership.data.group_id);
+      return {userId: current.user.id, isAdmin: result.data.is_admin === true, defaultGroupId};
       } catch (error) { throw mappedError(error); }
     }
 
