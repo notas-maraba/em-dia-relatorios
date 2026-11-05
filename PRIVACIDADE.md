@@ -10,6 +10,10 @@ O diário de horas dos meses de pioneiro é separado dos relatórios recebidos. 
 
 Vários lançamentos na mesma data permanecem como registros separados. A soma por dia e por mês é conferida no banco. Cada edição ou exclusão exige o acesso vinculado ao cartão e a versão atual do diário. Repetir a mesma requisição identificada não acrescenta outro registro. Clientes antigos não podem substituir silenciosamente um dia que já tenha vários lançamentos.
 
+A observação opcional pertence ao lançamento privado e fica disponível apenas ao publicador vinculado ao cartão. O envio mensal leva os totais de atividade, sem a observação. O texto é exibido como texto, sem executar marcação ou scripts. Clientes antigos preservam a observação quando alteram somente as horas de um registro. As cópias privadas do banco devem proteger esses textos junto com o restante do diário.
+
+O cronômetro também é privado do cartão. Estado, horários e recibo do último lançamento ficam em tabela privada, sem acesso direto por navegador, administrador ou superintendente. As funções conferem a conta e o vínculo no servidor. A transferência do cartão leva o cronômetro; trocar o login não o reinicia. Não há cópia do cronômetro em localStorage ou no cache de instalação. Sair da conta limpa sua exibição, sem parar uma contagem na nuvem. Inclua essa tabela nas cópias privadas do banco; o backup JSON do grupo não a contém.
+
 Salvar um lançamento não envia o relatório. O envio exige mês encerrado e usa a soma calculada no banco, com controle de versões para evitar totais desatualizados. Remover um lançamento diário não remove um relatório recebido. O backup JSON do grupo não contém o diário privado; sua cópia de segurança exige uma exportação privada do banco por administração confiável.
 
 A chave publishable e a URL são identificadores públicos. Não dão acesso aos dados por si só. Nunca publique senha, chave secreta ou service_role.

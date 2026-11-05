@@ -25,6 +25,8 @@ Na atualização para vários lançamentos por dia, guarde uma cópia privada at
 
 ## Instalação no celular
 
+Na versão 4.4.0, aplique em ordem as migrações de horas acumuladas/observações e cronômetro persistente antes da interface. Guarde uma cópia privada atualizada antes de cada migração. Elas verificam a preservação dos oito conjuntos existentes; a tabela de cronômetros começa vazia. Observações antigas não são inventadas nem regravadas. Verifique os testes accumulated-notes-security.sql e timer-security.sql, além das regressões de diário, múltiplos lançamentos e perfis, todos com rollback. Inclua service_timers nas próximas cópias privadas do banco. Não inicie cronômetros nem grave lançamentos em cartões reais para testar.
+
 Publique também manifest.webmanifest, sw.js, assets/install.js e assets/icons/. A instalação usa HTTPS no endereço público e abre em janela de aplicativo. Não precisa de uma loja de aplicativos.
 
 Em cada nova versão, atualize RELEASE em sw.js, os arquivos públicos da lista SHELL e as versões dos assets em index.html. Não reutilize a versão do cache após mudar arquivos. O worker novo aguarda as abas antigas fecharem, para não interromper formulários abertos. Não adicione respostas do Supabase, callbacks de login, backups ou outros dados pessoais ao cache.
