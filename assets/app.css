@@ -225,3 +225,8 @@
   dialog footer{padding:12px 20px calc(14px + env(safe-area-inset-bottom))}
   #toasts{bottom:calc(78px + env(safe-area-inset-bottom))}
 }
+
+@media screen{
+  .profile-actions{flex-wrap:wrap;gap:6px}
+  .profile-actions>[data-action="person-annual"]{margin-right:auto}
+}
