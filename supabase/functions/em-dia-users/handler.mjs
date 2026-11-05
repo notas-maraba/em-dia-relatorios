@@ -1,5 +1,6 @@
 /* User administration boundary. Credentials and auth results are never logged. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ROLES = ['admin', 'superintendent', 'publisher'];
 const MAX_BYTES = 8192;
 const ALLOWED_ORIGIN = 'https://notas-maraba.github.io';
 const CORS_HEADERS = 'authorization,apikey,content-type,x-client-info,x-supabase-api-version,x-supabase-client-platform,x-supabase-client-platform-version,x-supabase-client-runtime,x-supabase-client-runtime-version';
@@ -13,6 +14,18 @@ function groupRow(value) {
   const row = rows.length === 1 ? rows[0] : null;
   if (!row || !UUID.test(row.id) || typeof row.name !== 'string') throw new RequestError('operation_unconfirmed', 503);
   return {id: row.id, name: row.name, created_at: row.created_at || null};
+}
+
+function objectRow(value) {
+  const rows = Array.isArray(value) ? value : [value];
+  const row = rows.length === 1 ? rows[0] : null;
+  if (!row || typeof row !== 'object' || Array.isArray(row)) throw new RequestError('operation_unconfirmed', 503);
+  return row;
+}
+
+function personId(value) {
+  if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(value) || ['__proto__', 'constructor', 'prototype'].includes(value)) throw new RequestError('invalid_input');
+  return value;
 }
 
 function selection(body) {
@@ -47,13 +60,20 @@ async function input(request) {
   let body;
   try { body = JSON.parse(new TextDecoder().decode(bytes)); } catch (_) { throw new RequestError('invalid_input'); }
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new RequestError('invalid_input');
-  const fields = {list: ['action'], create: ['action', 'email', 'password', 'groupId', 'newGroupName'], assign: ['action', 'userId', 'groupId', 'newGroupName']}[body.action];
+  const allowed = {
+    list: ['action'],
+    create: ['action', 'email', 'password', 'groupId', 'newGroupName', 'role'],
+    assign: ['action', 'userId', 'groupId', 'newGroupName', 'role'],
+    create_publisher: ['action', 'email', 'password', 'groupId', 'personId']
+  };
+  const fields = typeof body.action === 'string' && Object.hasOwn(allowed, body.action) ? allowed[body.action] : null;
   if (!Array.isArray(fields) || Object.keys(body).some(key => !fields.includes(key))) throw new RequestError('invalid_input');
   return body;
 }
 
 function databaseError(error) {
   if (error?.code === '42501') return new RequestError('access_denied', 403);
+  if (['40001', 'PT409', '23505'].includes(error?.code)) return new RequestError('operation_conflict', 409);
   if (['22023', '23503', '23514'].includes(error?.code)) return new RequestError('invalid_input');
   return new RequestError('operation_unconfirmed', 503);
 }
@@ -73,9 +93,12 @@ export function createHandler({getClients, allowedOrigin = ALLOWED_ORIGIN}) {
       const verification = await userClient.auth.getUser(authorization.slice(7));
       if (verification.error || !verification.data?.user?.id) throw new RequestError('auth_required', 401);
       const userId = verification.data.user.id;
-      const membership = await userClient.from('em_dia_members').select('user_id,is_admin').eq('user_id', userId).maybeSingle();
-      if (membership.error || membership.data?.user_id !== userId || membership.data.is_admin !== true) throw new RequestError('access_denied', 403);
+      const membership = await userClient.rpc('get_em_dia_access_profile');
+      if (membership.error) throw databaseError(membership.error);
+      const actor = objectRow(membership.data);
+      if (actor.user_id !== userId || !['admin', 'superintendent'].includes(actor.role) || actor.is_admin !== (actor.role === 'admin')) throw new RequestError('access_denied', 403);
       const body = await input(request);
+      if (actor.role !== 'admin' && body.action !== 'create_publisher') throw new RequestError('access_denied', 403);
       if (body.action === 'list') {
         const users = [];
         const perPage = 200;
@@ -89,29 +112,64 @@ export function createHandler({getClients, allowedOrigin = ALLOWED_ORIGIN}) {
         const [links, groups, members] = await Promise.all([
           userClient.from('em_dia_group_members').select('group_id,user_id'),
           userClient.from('em_dia_groups').select('id,name'),
-          adminClient.from('em_dia_members').select('user_id,is_admin')
+          adminClient.from('em_dia_members').select('user_id,is_admin,access_role')
         ]);
         if (links.error || groups.error || members.error || !Array.isArray(links.data) || !Array.isArray(groups.data) || !Array.isArray(members.data)) throw new RequestError('operation_unconfirmed', 503);
+        // PostgREST's default row cap must never turn a partial list into an apparently complete one.
+        if ([links.data, groups.data, members.data].some(rows => rows.length >= 1000)) throw new RequestError('users_limit', 413);
         const names = new Map(groups.data.map(group => [group.id, group.name]));
         const linked = new Map(links.data.map(link => [link.user_id, link.group_id]));
-        const approved = new Map(members.data.map(member => [member.user_id, member.is_admin === true]));
-        return respond({ok: true, users: users.map(user => ({id: user.id, email: user.email || '', isAdmin: approved.get(user.id) === true, groupId: linked.get(user.id) || null, groupName: names.get(linked.get(user.id)) || null}))});
+        const approved = new Map();
+        for (const member of members.data) {
+          if (!UUID.test(member.user_id || '') || !ROLES.includes(member.access_role) || member.is_admin !== (member.access_role === 'admin')) throw new RequestError('operation_unconfirmed', 503);
+          approved.set(member.user_id, member.access_role);
+        }
+        const bound = new Map();
+        const bindingLists = await Promise.all(groups.data.map(group => userClient.rpc('list_em_dia_publisher_accounts', {p_group_id: group.id})));
+        for (const bindingList of bindingLists) {
+          if (bindingList.error || !Array.isArray(bindingList.data) || bindingList.data.length >= 1000) throw new RequestError('operation_unconfirmed', 503);
+          for (const binding of bindingList.data) {
+            if (!UUID.test(binding.user_id || '') || bound.has(binding.user_id)) throw new RequestError('operation_unconfirmed', 503);
+            bound.set(binding.user_id, personId(binding.person_id));
+          }
+        }
+        return respond({ok: true, users: users.map(user => ({id: user.id, email: user.email || '', role: approved.get(user.id) || null,
+          isAdmin: approved.get(user.id) === 'admin', groupId: linked.get(user.id) || null,
+          groupName: names.get(linked.get(user.id)) || null, publisherId: bound.get(user.id) || null}))});
       }
-      const target = selection(body);
-      if (target.groupId) {
+      const creatingPublisher = body.action === 'create_publisher';
+      const target = creatingPublisher ? {groupId: UUID.test(body.groupId || '') ? body.groupId : null, newGroupName: null} : selection(body);
+      let publisher = null;
+      if (creatingPublisher) {
+        if (!target.groupId) throw new RequestError('invalid_input');
+        publisher = personId(body.personId);
+      }
+      let role = null;
+      if (!creatingPublisher && body.role !== undefined && body.role !== null) {
+        if (!['admin', 'superintendent'].includes(body.role)) throw new RequestError('invalid_input');
+        role = body.role;
+      }
+      if (!creatingPublisher && body.action === 'create' && role === null) role = 'superintendent';
+      if (!creatingPublisher && target.groupId) {
         const selected = await userClient.from('em_dia_groups').select('id').eq('id', target.groupId).maybeSingle();
         if (selected.error || selected.data?.id !== target.groupId) throw new RequestError('invalid_group');
       }
       let targetUserId = body.userId;
-      if (body.action === 'create') {
+      const creating = body.action === 'create' || creatingPublisher;
+      if (creating) {
         if (typeof body.email !== 'string' || body.email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email.trim())) throw new RequestError('invalid_input');
         if (typeof body.password !== 'string' || body.password.length < 12 || body.password.length > 128) throw new RequestError('invalid_password');
+        if (creatingPublisher) {
+          const preflight = await userClient.rpc('preflight_em_dia_publisher_account', {p_group_id: target.groupId, p_person_id: publisher});
+          if (preflight.error) throw databaseError(preflight.error);
+          const selected = objectRow(preflight.data);
+          if (selected.group_id !== target.groupId || selected.person_id !== publisher || typeof selected.name !== 'string') throw new RequestError('invalid_group');
+        }
         let created;
         try {
           created = await adminClient.auth.admin.createUser({email: body.email.trim().toLowerCase(), password: body.password, email_confirm: true});
         } catch (_) { throw new RequestError('account_exists_needs_assignment', 503); }
-        // Do not echo or retain request credentials once Auth has handled them.
-        delete body.password;
+        finally { delete body.password; }
         if (created.error) {
           if (['email_exists', 'user_already_exists'].includes(created.error.code)) throw new RequestError('account_exists', 409);
           if (created.error.status === 429) throw new RequestError('rate_limited', 429);
@@ -122,18 +180,22 @@ export function createHandler({getClients, allowedOrigin = ALLOWED_ORIGIN}) {
       } else if (!UUID.test(targetUserId || '')) throw new RequestError('invalid_input');
       let provision;
       try {
-        provision = await userClient.rpc('provision_em_dia_group_member', {p_user_id: targetUserId, p_group_id: target.groupId, p_new_group_name: target.newGroupName});
+        provision = creatingPublisher
+          ? await userClient.rpc('provision_em_dia_publisher_account', {p_user_id: targetUserId, p_group_id: target.groupId, p_person_id: publisher})
+          : await userClient.rpc('provision_em_dia_access', {p_user_id: targetUserId, p_role: role, p_group_id: target.groupId, p_new_group_name: target.newGroupName});
       } catch (_) {
-        throw new RequestError(body.action === 'create' ? 'account_exists_needs_assignment' : 'operation_unconfirmed', 503);
+        throw new RequestError(creating ? 'account_exists_needs_assignment' : 'operation_unconfirmed', 503);
       }
       if (provision.error) {
-        if (body.action === 'create') throw new RequestError('account_exists_needs_assignment', 409);
+        if (creating) throw new RequestError('account_exists_needs_assignment', 409);
         throw databaseError(provision.error);
       }
       let group;
-      try { group = groupRow(provision.data); }
-      catch (_) { throw new RequestError(body.action === 'create' ? 'account_exists_needs_assignment' : 'operation_unconfirmed', 503); }
-      return respond({ok: true, userId: targetUserId, group});
+      try {
+        group = groupRow(provision.data);
+        if (target.groupId && group.id !== target.groupId) throw new Error('Unexpected group');
+      } catch (_) { throw new RequestError(creating ? 'account_exists_needs_assignment' : 'operation_unconfirmed', 503); }
+      return respond({ok: true, userId: targetUserId, group, ...(creatingPublisher ? {personId: publisher} : {})});
     } catch (error) {
       // Only a closed set of static error codes crosses the server boundary.
       if (error instanceof RequestError) return respond({ok: false, code: error.code}, error.status);

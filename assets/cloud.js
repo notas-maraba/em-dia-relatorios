@@ -7,6 +7,7 @@
 })(typeof globalThis === 'object' ? globalThis : this, function() {
   'use strict';
   const DEFAULT_REDIRECT = 'https://notas-maraba.github.io/em-dia-relatorios/';
+  const ROLES = ['admin', 'superintendent', 'publisher'];
 
   class CloudError extends Error {
     constructor(message, code = 'cloud_error', cause) {
@@ -73,6 +74,57 @@
     return value;
   }
 
+  function checkedPersonId(value) {
+    if (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(value) || ['__proto__', 'constructor', 'prototype'].includes(value)) {
+      throw new CloudError('Escolha um publicador válido antes de continuar.', 'invalid_person');
+    }
+    return value;
+  }
+
+  function checkedMonth(value) {
+    if (typeof value !== 'string' || !/^(19|20|21)\d{2}-(0[1-9]|1[0-2])$/.test(value)) {
+      throw new CloudError('Escolha um mês válido.', 'invalid_month');
+    }
+    return value;
+  }
+
+  function checkedVersion(value, minimum = 0) {
+    if (!Number.isSafeInteger(value) || value < minimum || value >= Number.MAX_SAFE_INTEGER) {
+      throw new CloudError('Recarregue os dados antes de continuar.', 'invalid_revision');
+    }
+    return value;
+  }
+
+  function objectResult(value) {
+    const rows = Array.isArray(value) ? value : [value];
+    if (rows.length !== 1 || !stateObject(rows[0])) throw new CloudError('A nuvem retornou uma resposta inválida.', 'invalid_response');
+    return rows[0];
+  }
+
+  function activityInput(value) {
+    if (!stateObject(value) || Object.keys(value).some(key => !['participated', 'hours', 'studies'].includes(key)) ||
+        !['participated', 'hours', 'studies'].every(key => Object.hasOwn(value, key)) ||
+        !(value.participated === null || typeof value.participated === 'boolean') ||
+        !(value.hours === null || typeof value.hours === 'number' && Number.isFinite(value.hours) && value.hours >= 0 && value.hours <= 744 && Math.abs(value.hours * 100 - Math.round(value.hours * 100)) < 1e-7) ||
+        !(value.studies === null || Number.isSafeInteger(value.studies) && value.studies >= 0 && value.studies <= 9999)) {
+      throw new CloudError('Confira a participação, as horas e os estudos informados.', 'invalid_report');
+    }
+    return {participated: value.participated, hours: value.hours, studies: value.studies};
+  }
+
+  function activityResult(value) {
+    if (!stateObject(value) || !['publisher', 'regular', 'auxiliary'].includes(value.kind)) throw new CloudError('A nuvem retornou um relatório inválido.', 'invalid_response');
+    const input = activityInput({participated: value.participated, hours: value.hours, studies: value.studies});
+    return {...input, kind: value.kind, received: value.received === true};
+  }
+
+  function ownRevision(value) {
+    if (!stateObject(value) || !['accepted', 'pending', 'ignored'].includes(value.status)) throw new CloudError('A nuvem retornou uma solicitação inválida.', 'invalid_response');
+    return {id: checkedGroupId(value.id), month: checkedMonth(value.month), status: value.status,
+      version: checkedVersion(Number(value.version), 1), report: activityResult(value.proposed_report),
+      submittedAt: value.submitted_at || null, reviewedAt: value.reviewed_at || null};
+  }
+
   function groupResult(row) {
     if (!row || typeof row.name !== 'string' || !row.name.trim()) {
       throw new CloudError('A nuvem retornou um grupo inválido.', 'invalid_response');
@@ -108,28 +160,31 @@
       try {
       const current = await session();
       if (!current) throw new AuthRequiredError();
-      const result = await client.from('em_dia_members').select('user_id,is_admin')
-        .eq('user_id', current.user.id).maybeSingle();
+      const result = await client.rpc('get_em_dia_access_profile');
       if (result.error) throw result.error;
-      if (result.data?.user_id !== current.user.id) throw new AccessDeniedError();
-      // The assignment is also the administrator's default group. Consulting
-      // another group must never rewrite this server-controlled assignment.
-      const membership = await client.from('em_dia_group_members').select('user_id,group_id')
-        .eq('user_id', current.user.id).maybeSingle();
-      if (membership.error) throw membership.error;
-      if (membership.data !== null && membership.data?.user_id !== current.user.id) throw new AccessDeniedError();
-      const defaultGroupId = membership.data === null ? null : checkedGroupId(membership.data.group_id);
-      return {userId: current.user.id, isAdmin: result.data.is_admin === true, defaultGroupId};
+      const row = objectResult(result.data);
+      if (row.user_id !== current.user.id || !ROLES.includes(row.role) ||
+          (row.is_admin !== undefined && row.is_admin !== (row.role === 'admin'))) throw new AccessDeniedError();
+      const defaultGroupId = row.group_id === null ? null : checkedGroupId(row.group_id);
+      const publisherId = row.publisher_id === null || row.publisher_id === undefined ? null : checkedPersonId(row.publisher_id);
+      if ((row.role === 'publisher') !== (publisherId !== null) || row.role === 'publisher' && !defaultGroupId) throw new AccessDeniedError();
+      return {userId: current.user.id, role: row.role, isAdmin: row.role === 'admin', defaultGroupId, publisherId};
       } catch (error) { throw mappedError(error); }
+    }
+
+    async function requireManager() {
+      const current = await profile();
+      if (!['admin', 'superintendent'].includes(current.role)) throw new AccessDeniedError();
+      return current;
     }
 
     async function allowedGroup(groupId) {
       checkedGroupId(groupId);
-      await profile();
+      await requireManager();
       const result = await client.from('em_dia_groups').select('id,name,created_at')
         .eq('id', groupId).maybeSingle();
       if (result.error) throw result.error;
-      if (!result.data) throw new AccessDeniedError();
+      if (!result.data || result.data.id !== groupId) throw new AccessDeniedError();
       return groupResult(result.data);
     }
 
@@ -182,7 +237,8 @@
       const value = String(name || '').trim();
       if (!value || value.length > 80) throw new CloudError('Informe um nome de grupo com até 80 caracteres.', 'invalid_group_name');
       try {
-        await profile();
+        const current = await profile();
+        if (!current.isAdmin) throw new AccessDeniedError();
         const result = await client.rpc('create_em_dia_group', {p_name: value});
         if (result.error) throw result.error;
         const rows = Array.isArray(result.data) ? result.data : [result.data];
@@ -191,19 +247,122 @@
       } catch (error) { throw mappedError(error, true); }
     }
 
+    async function readOwnCard() {
+      try {
+        const current = await profile();
+        if (current.role !== 'publisher') throw new AccessDeniedError();
+        const result = await client.rpc('read_em_dia_own_card');
+        if (result.error) throw result.error;
+        const row = objectResult(result.data), own = rowResult(row, current.defaultGroupId);
+        if (row.person_id !== current.publisherId || typeof row.group_name !== 'string' || !row.group_name.trim() ||
+            !Array.isArray(own.state.people) || own.state.people.length !== 1 || own.state.people[0]?.id !== current.publisherId ||
+            own.state.people[0].notes !== '' || !stateObject(own.state.reports) || !stateObject(own.state.reminders) || Object.keys(own.state.reminders).length ||
+            Object.values(own.state.reports).some(entries => !stateObject(entries) || Object.keys(entries).some(id => id !== current.publisherId) || Object.values(entries).some(report => report.notes !== '')) ||
+            !Array.isArray(row.revisions)) throw new CloudError('A nuvem retornou um cartão inválido.', 'invalid_response');
+        return {...own, groupId: row.group_id, personId: row.person_id,
+          group: {id: row.group_id, name: row.group_name, createdAt: null}, revisions: row.revisions.map(ownRevision)};
+      } catch (error) { throw mappedError(error); }
+    }
+
+    async function submitOwnReport({month, report, expectedVersion} = {}) {
+      const selectedMonth = checkedMonth(month), input = activityInput(report), version = checkedVersion(expectedVersion);
+      try {
+        const current = await profile();
+        if (current.role !== 'publisher') throw new AccessDeniedError();
+        const result = await client.rpc('submit_em_dia_own_report', {p_month: selectedMonth, p_report: input, p_expected_version: version});
+        if (result.error) throw result.error;
+        const row = objectResult(result.data);
+        if (!['accepted', 'pending'].includes(row.status) || row.group_id !== current.defaultGroupId || row.person_id !== current.publisherId || row.month !== selectedMonth || typeof row.unchanged !== 'boolean') {
+          throw new CloudError('Não foi possível confirmar o envio. Recarregue seu cartão antes de tentar novamente.', 'invalid_response');
+        }
+        const savedVersion = checkedVersion(Number(row.version));
+        if (savedVersion === 0 && !(row.status === 'accepted' && row.unchanged)) throw new CloudError('Não foi possível confirmar a versão do envio.', 'invalid_response');
+        return {status: row.status, version: savedVersion, groupId: row.group_id, personId: row.person_id,
+          month: row.month, revision: checkedVersion(Number(row.revision), 1), unchanged: row.unchanged};
+      } catch (error) { throw mappedError(error, true); }
+    }
+
+    async function listRevisions(groupId) {
+      const id = checkedGroupId(groupId);
+      try {
+        await allowedGroup(id);
+        const result = await client.rpc('list_em_dia_report_revisions', {p_group_id: id});
+        if (result.error) throw result.error;
+        const row = objectResult(result.data);
+        if (!Array.isArray(row.revisions) || !Number.isSafeInteger(Number(row.total)) || Number(row.total) < row.revisions.length) throw new CloudError('A lista de alterações está inválida.', 'invalid_response');
+        return {total: Number(row.total), revisions: row.revisions.map(item => {
+          if (!stateObject(item) || typeof item.person_name !== 'string') throw new CloudError('A lista de alterações está inválida.', 'invalid_response');
+          return {id: checkedGroupId(item.id), version: checkedVersion(Number(item.version), 1), personId: checkedPersonId(item.person_id),
+            personName: item.person_name, month: checkedMonth(item.month), approvedReport: item.approved_report === null ? null : activityResult(item.approved_report),
+            proposedReport: activityResult(item.proposed_report), submittedAt: item.submitted_at || null};
+        })};
+      } catch (error) { throw mappedError(error); }
+    }
+
+    async function reviewRevision({revisionId, expectedVersion, decision} = {}) {
+      const id = checkedGroupId(revisionId), version = checkedVersion(expectedVersion, 1);
+      if (!['accept', 'ignore'].includes(decision)) throw new CloudError('Escolha aceitar ou ignorar a alteração.', 'invalid_decision');
+      try {
+        const current = await requireManager();
+        const result = await client.rpc('review_em_dia_report_revision', {p_revision_id: id, p_expected_version: version, p_decision: decision});
+        if (result.error) throw result.error;
+        const row = objectResult(result.data);
+        if (!['accepted', 'ignored'].includes(row.status) || row.status !== (decision === 'accept' ? 'accepted' : 'ignored') || typeof row.unchanged !== 'boolean' ||
+            !current.isAdmin && row.group_id !== current.defaultGroupId) throw new CloudError('Não foi possível confirmar a decisão. Atualize a lista.', 'invalid_response');
+        return {status: row.status, version: checkedVersion(Number(row.version), 1), groupId: checkedGroupId(row.group_id),
+          revision: checkedVersion(Number(row.revision), 1), unchanged: row.unchanged};
+      } catch (error) { throw mappedError(error, true); }
+    }
+
+    async function transferGroups() {
+      try {
+        await requireManager();
+        const result = await client.rpc('list_em_dia_transfer_groups');
+        if (result.error) throw result.error;
+        if (!Array.isArray(result.data)) throw new CloudError('Não foi possível carregar os grupos de destino.', 'invalid_response');
+        return result.data.map(groupResult);
+      } catch (error) { throw mappedError(error); }
+    }
+
+    async function transferPublisher({fromGroupId, toGroupId, personId, expectedRevision} = {}) {
+      const from = checkedGroupId(fromGroupId), to = checkedGroupId(toGroupId), person = checkedPersonId(personId), revision = checkedVersion(expectedRevision, 1);
+      if (from === to) throw new CloudError('Escolha outro grupo de destino.', 'invalid_group');
+      try {
+        await allowedGroup(from);
+        const result = await client.rpc('transfer_em_dia_publisher', {p_from_group_id: from, p_to_group_id: to, p_person_id: person, p_expected_from_revision: revision});
+        if (result.error) throw result.error;
+        const row = objectResult(result.data);
+        if (row.from_group_id !== from || row.to_group_id !== to || row.person_id !== person) throw new CloudError('Não foi possível confirmar a transferência. Recarregue os grupos.', 'invalid_response');
+        return {fromGroupId: from, toGroupId: to, personId: person, fromRevision: checkedVersion(Number(row.from_revision), 1), toRevision: checkedVersion(Number(row.to_revision), 1)};
+      } catch (error) { throw mappedError(error, true); }
+    }
+
+    async function publisherAccounts(groupId) {
+      const id = checkedGroupId(groupId);
+      try {
+        await allowedGroup(id);
+        const result = await client.rpc('list_em_dia_publisher_accounts', {p_group_id: id});
+        if (result.error) throw result.error;
+        if (!Array.isArray(result.data)) throw new CloudError('Não foi possível consultar os acessos dos publicadores.', 'invalid_response');
+        return result.data.map(item => ({personId: checkedPersonId(item.person_id), userId: checkedGroupId(item.user_id)}));
+      } catch (error) { throw mappedError(error); }
+    }
+
     const adminMessages = {
-      account_exists: 'Este e-mail já tem uma conta. Use a lista de usuários para vinculá-la a um grupo.',
-      account_exists_needs_assignment: 'A conta pode ter sido criada, mas o vínculo não foi confirmado. Atualize a lista de usuários e vincule a conta antes de tentar criá-la novamente.',
-      invalid_input: 'Confira os dados do usuário e escolha um grupo existente ou informe um novo grupo.',
+      account_exists: 'Este e-mail já tem uma conta. A administração precisa conferir o vínculo antes de tentar novamente.',
+      account_exists_needs_assignment: 'A conta pode ter sido criada, mas o vínculo não foi confirmado. A administração precisa conferir o acesso antes de repetir o cadastro.',
+      invalid_input: 'Confira os dados do usuário e o vínculo escolhido.',
       invalid_password: 'Use uma senha com pelo menos 12 caracteres.',
       invalid_group: 'O grupo escolhido não está disponível. Atualize a lista de grupos.',
       rate_limited: 'Aguarde um pouco antes de tentar novamente.',
-      users_limit: 'A lista de usuários excede o limite de consulta. Contate o administrador do projeto.'
+      users_limit: 'A lista de usuários excede o limite de consulta. Contate o administrador do projeto.',
+      operation_conflict: 'Os dados mudaram durante a operação. Atualize a lista antes de tentar novamente.'
     };
 
     async function adminRequest(body) {
       const current = await profile();
-      if (!current.isAdmin) throw new AccessDeniedError();
+      const allowed = body.action === 'create_publisher' ? ['admin', 'superintendent'] : ['admin'];
+      if (!allowed.includes(current.role)) throw new AccessDeniedError();
       if (!client.functions?.invoke) throw new CloudError('A administração de usuários está indisponível.', 'admin_unavailable');
       let response;
       try { response = await client.functions.invoke('em-dia-users', {body}); }
@@ -221,9 +380,12 @@
     async function listUsers() {
       const result = await adminRequest({action: 'list'});
       if (!Array.isArray(result.users)) throw new CloudError('Não foi possível carregar os usuários.', 'invalid_response');
-      return {users: result.users.map(user => ({id: checkedGroupId(user.id), email: String(user.email || ''),
-        isAdmin: user.isAdmin === true, groupId: user.groupId ? checkedGroupId(user.groupId) : null,
-        groupName: user.groupName ? String(user.groupName) : null}))};
+      return {users: result.users.map(user => {
+        if (!stateObject(user) || user.role !== null && !ROLES.includes(user.role)) throw new CloudError('A administração retornou um perfil inválido.', 'invalid_response');
+        return {id: checkedGroupId(user.id), email: String(user.email || ''), role: user.role, isAdmin: user.role === 'admin',
+          groupId: user.groupId ? checkedGroupId(user.groupId) : null, groupName: user.groupName ? String(user.groupName) : null,
+          publisherId: user.publisherId ? checkedPersonId(user.publisherId) : null};
+      })};
     }
 
     function targetGroup({groupId, newGroupName}) {
@@ -234,17 +396,33 @@
       return groupId ? {groupId: checkedGroupId(groupId)} : {newGroupName: name};
     }
 
-    async function createUser({email, password, groupId, newGroupName} = {}) {
+    function managerRole(role, optional = false) {
+      if (optional && (role === undefined || role === null)) return {};
+      if (!['admin', 'superintendent'].includes(role)) throw new CloudError('Escolha Administrador ou Superintendente. O acesso de publicador é criado no cartão.', 'invalid_role');
+      return {role};
+    }
+
+    async function createUser({email, password, groupId, newGroupName, role = 'superintendent'} = {}) {
       const normalized = String(email || '').trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) throw new CloudError('Informe um e-mail válido.', 'invalid_email');
       if (typeof password !== 'string' || password.length < 12 || password.length > 128) throw new CloudError(adminMessages.invalid_password, 'invalid_password');
-      const result = await adminRequest({action: 'create', email: normalized, password, ...targetGroup({groupId, newGroupName})});
+      const result = await adminRequest({action: 'create', email: normalized, password, ...targetGroup({groupId, newGroupName}), ...managerRole(role)});
       return {userId: checkedGroupId(result.userId), group: groupResult(result.group)};
     }
 
-    async function assignUser({userId, groupId, newGroupName} = {}) {
-      const result = await adminRequest({action: 'assign', userId: checkedGroupId(userId), ...targetGroup({groupId, newGroupName})});
+    async function assignUser({userId, groupId, newGroupName, role} = {}) {
+      const result = await adminRequest({action: 'assign', userId: checkedGroupId(userId), ...targetGroup({groupId, newGroupName}), ...managerRole(role, true)});
       return {userId: checkedGroupId(result.userId), group: groupResult(result.group)};
+    }
+
+    async function createPublisherUser({email, password, groupId, personId} = {}) {
+      const normalized = String(email || '').trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) throw new CloudError('Informe um e-mail válido.', 'invalid_email');
+      if (typeof password !== 'string' || password.length < 12 || password.length > 128) throw new CloudError(adminMessages.invalid_password, 'invalid_password');
+      const id = checkedGroupId(groupId), person = checkedPersonId(personId);
+      const result = await adminRequest({action: 'create_publisher', email: normalized, password, groupId: id, personId: person});
+      if (result.personId !== person || result.group?.id !== id) throw new CloudError('Não foi possível confirmar o vínculo do publicador.', 'invalid_response');
+      return {userId: checkedGroupId(result.userId), group: groupResult(result.group), personId: person};
     }
 
     async function login(email) {
@@ -319,7 +497,9 @@
       };
     }
 
-    return Object.freeze({profile, groups, read, save, createGroup, listUsers, createUser, assignUser, login, loginPassword, logout, session, subscribeAuth});
+    return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, submitOwnReport, listRevisions, reviewRevision,
+      transferGroups, transferPublisher, publisherAccounts, listUsers, createUser, assignUser, createPublisherUser,
+      login, loginPassword, logout, session, subscribeAuth});
   }
 
   return Object.freeze({create, CloudError, AuthRequiredError, AccessDeniedError, ConflictError});
