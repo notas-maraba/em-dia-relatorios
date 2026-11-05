@@ -28,8 +28,8 @@ function harness(overrides={},options={}) {
     addEventListener(name,fn){docEvents.set(name,fn);}};
   let currentSession={user:{id:'owner'}}, authCallback, saveCalls=0,confirmResult=true;
   const defaultGroups=[{id:'group_a',name:'Grupo de Teste A',createdAt:null},{id:'group_b',name:'Grupo de Teste B',createdAt:null}];
-  const cloud={session:async()=>currentSession,profile:async()=>({userId:currentSession?.user.id,isAdmin:true,defaultGroupId:'group_a'}),
-    groups:async()=>defaultGroups,
+  const cloud={session:async()=>currentSession,profile:async()=>({userId:currentSession?.user.id,isAdmin:true,role:'admin',defaultGroupId:'group_a'}),
+    groups:async()=>defaultGroups,listRevisions:async()=>({revisions:[],total:0}),publisherAccounts:async()=>[],transferGroups:async()=>defaultGroups,createPublisherUser:async()=>({userId:'publisher_user'}),transferPublisher:async()=>({}),
     createGroup:async name=>({id:'group_c',name}),listUsers:async()=>({users:[]}),createUser:async()=>({ok:true}),assignUser:async()=>({ok:true}),read:async()=>({state:fixture(),revision:7,updatedAt:null}),
     save:async state=>({state,revision:8,updatedAt:null}),login:async()=>({sent:true}),loginPassword:async()=>({signedIn:true}),
     logout:async()=>{},subscribeAuth(fn){authCallback=fn;return()=>{};},...overrides};
@@ -213,7 +213,7 @@ test('each selected group reads and saves only its own state and canonical group
 });
 test('a regular account sees its assigned checklist and cannot invoke group or user administration',async()=>{
   let lists=0,creates=0;const reads=[];
-  const h=harness({profile:async()=>({userId:'owner',isAdmin:false,defaultGroupId:'group_a'}),
+  const h=harness({profile:async()=>({userId:'owner',isAdmin:false,role:'superintendent',defaultGroupId:'group_a'}),
     listUsers:async()=>{lists++;return{users:[]};},createGroup:async()=>{creates++;},createUser:async()=>{creates++;},
     read:async id=>{reads.push(id);return{state:fixture(),revision:1};}});await flush();
   assert.doesNotMatch(h.element('#desktop-nav').innerHTML,/Usuários|>Grupos</);
@@ -288,12 +288,12 @@ test('existing user reassignment can create a new group without changing the pas
     assignUser:async payload=>{assigned={...payload};return{ok:true};}});await flush();
   h.click('tab','users');await flush();h.click('user-assign','responsible_user');
   await h.submit('modal-form',{groupMode:'new',newGroupName:'Grupo fictício C'});await flush();
-  assert.deepEqual(assigned,{userId:'responsible_user',newGroupName:'Grupo fictício C'});
+  assert.deepEqual(assigned,{userId:'responsible_user',role:'superintendent',newGroupName:'Grupo fictício C'});
   assert.equal(h.element('#modal').open,false);assert.doesNotMatch(h.element('#modal').innerHTML,/user-password/);
 });
 test('an account without an assigned group does not choose one arbitrarily or create a group',async()=>{
   let reads=0,creates=0;
-  const h=harness({profile:async()=>({userId:'owner',isAdmin:false,defaultGroupId:null}),
+  const h=harness({profile:async()=>({userId:'owner',isAdmin:false,role:'superintendent',defaultGroupId:null}),
     createGroup:async()=>{creates++;},read:async()=>{reads++;return null;}});await flush();
   assert.match(h.element('#app').innerHTML,/Grupo ainda não definido/);assert.doesNotMatch(h.element('#app').innerHTML,/Novo grupo|Grupo de Teste A|Grupo de Teste B/);
   h.click('group-new');await flush();assert.equal(reads,0);assert.equal(creates,0);assert.equal(h.element('#modal').open,false);
@@ -344,7 +344,7 @@ test('a cancelled group selector change restores its value and preserves the dra
 
 test('a changed regular membership clears the previous group before reading its replacement',async()=>{
   let initial='group_a';const next=deferred(),reads=[];
-  const h=harness({profile:async()=>({userId:'owner',isAdmin:false,defaultGroupId:initial}),
+  const h=harness({profile:async()=>({userId:'owner',isAdmin:false,role:'superintendent',defaultGroupId:initial}),
     read:id=>{reads.push(id);return id==='group_a'?Promise.resolve({state:groupFixture('a'),revision:1}):next.promise;}});await flush();
   initial='group_b';h.focus();await flush();
   assert.equal(h.window.EmDiaApp.getState(),null);assert.equal(h.window.EmDiaApp.getSelectedGroup().id,'group_b');
@@ -355,7 +355,7 @@ test('a changed regular membership clears the previous group before reading its 
 
 test('revoked administration closes the administrative view before the next groups response',async()=>{
   let admin=true,calls=0;const groups=deferred();
-  const h=harness({profile:async()=>({userId:'owner',isAdmin:admin,defaultGroupId:admin?'group_a':'group_b'}),
+  const h=harness({profile:async()=>({userId:'owner',isAdmin:admin,role:admin?'admin':'superintendent',defaultGroupId:admin?'group_a':'group_b'}),
     groups:()=>++calls===1?Promise.resolve([{id:'group_a',name:'Grupo de Teste A'},{id:'group_b',name:'Grupo de Teste B'}]):groups.promise,
     read:async id=>({state:groupFixture(id==='group_a'?'a':'b'),revision:1}),
     listUsers:async()=>({users:[{id:'another',email:'administracao@example.invalid',groupName:'Grupo de Teste A'}]})});await flush();
@@ -369,7 +369,7 @@ test('revoked administration closes the administrative view before the next grou
 });
 
 test('an unavailable assigned group never falls back to an arbitrary readable group',async()=>{
-  let reads=0;const h=harness({profile:async()=>({userId:'owner',isAdmin:false,defaultGroupId:'group_missing'}),
+  let reads=0;const h=harness({profile:async()=>({userId:'owner',isAdmin:false,role:'superintendent',defaultGroupId:'group_missing'}),
     read:async()=>{reads++;return null;}});await flush();
   assert.equal(reads,0);assert.equal(h.window.EmDiaApp.getState(),null);assert.equal(h.window.EmDiaApp.getSelectedGroup(),null);
   assert.match(h.element('#app').innerHTML,/Grupo ainda não definido/);
@@ -378,7 +378,7 @@ test('an unavailable assigned group never falls back to an arbitrary readable gr
 
 test('an admin without a startup group can explicitly browse without silently assigning one',async()=>{
   const reads=[];let assignments=0;
-  const h=harness({profile:async()=>({userId:'owner',isAdmin:true,defaultGroupId:null}),
+  const h=harness({profile:async()=>({userId:'owner',isAdmin:true,role:'admin',defaultGroupId:null}),
     read:async id=>{reads.push(id);return{state:fixture(),revision:1};},assignUser:async()=>{assignments++;}});await flush();
   assert.deepEqual(reads,[]);assert.match(h.element('#app').innerHTML,/Defina seu grupo inicial/);
   await h.change('group-selector','group_b');await flush();
@@ -387,8 +387,8 @@ test('an admin without a startup group can explicitly browse without silently as
 });
 
 test('an admin can change their startup assignment without changing the group being browsed',async()=>{
-  let initial='group_a';const h=harness({profile:async()=>({userId:'owner',isAdmin:true,defaultGroupId:initial}),
-    listUsers:async()=>({users:[{id:'owner',email:'admin@example.invalid',isAdmin:true,groupId:initial}]}),
+  let initial='group_a';const h=harness({profile:async()=>({userId:'owner',isAdmin:true,role:'admin',defaultGroupId:initial}),
+    listUsers:async()=>({users:[{id:'owner',email:'admin@example.invalid',isAdmin:true,role:'admin',groupId:initial}]}),
     assignUser:async()=>{initial='group_b';return{userId:'owner',group:{id:'group_b',name:'Grupo de Teste B'}};}});await flush();
   h.click('tab','users');await flush();h.click('user-assign','owner');
   assert.match(h.element('#modal').innerHTML,/grupo que abre ao entrar/);
@@ -500,4 +500,175 @@ test('the annual shortcut keeps the report year within the existing supported ra
   const h=harness({read:async()=>({state:data,revision:7})});await flush();h.click('person-annual','p_fixture');await flush();
   assert.equal(h.window.EmDiaApp.getUI().year,2198);assert.equal(h.window.EmDiaApp.getUI().month,'2199-12');
   assert.equal(h.window.EmDiaApp.reportSpec().rows.length,12);assert.equal(h.saveCalls(),0);
+});
+function publisherProfile(personId='p_fixture',groupId='group_a') {
+  return {userId:'owner',isAdmin:false,role:'publisher',defaultGroupId:groupId,publisherId:personId};
+}
+function ownBundle({state=fixture(),revisions=[],personId='p_fixture',groupId='group_a'}={}) {
+  state=C.clone(state);state.settings.reminder='';
+  return {groupId,personId,group:{id:groupId,name:'Grupo privado fictício',createdAt:null},state,revision:7,updatedAt:null,revisions};
+}
+const activity=(changes={})=>({kind:'publisher',participated:true,hours:null,studies:1,...changes});
+const report=(changes={})=>({received:true,...activity(),notes:'',receivedDate:null,updatedAt:null,...changes});
+const pendingRevision=()=>({id:'revision_fixture',version:2,personId:'p_fixture',personName:'Pessoa de Teste',month:C.emptyState().activeMonth,approvedReport:activity(),proposedReport:activity({studies:3}),submittedAt:null});
+
+test('publisher boot loads only the own-card boundary and exposes two private tabs',async()=>{
+  let groupReads=0,stateReads=0,users=0,revisions=0;const data=fixture();data.settings.reminder='Lembrete interno fictício';
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),groups:async()=>{groupReads++;return[];},read:async()=>{stateReads++;},listUsers:async()=>{users++;},listRevisions:async()=>{revisions++;}});await flush();
+  assert.equal(h.window.EmDiaApp.getUI().tab,'my-card');assert.match(h.element('#app').innerHTML,/Meu acompanhamento|MEU CARTÃO/);
+  assert.match(h.element('#mobile-nav').innerHTML,/Meu cartão|Meus relatórios/);assert.doesNotMatch(h.element('#mobile-nav').innerHTML,/Publicadores|Usuários|Dados|Revisões/);
+  assert.equal(groupReads,0);assert.equal(stateReads,0);assert.equal(users,0);assert.equal(revisions,0);
+  assert.equal(h.window.EmDiaApp.getState().settings.reminder,'');assert.equal(h.window.EmDiaApp.getGroups().length,1);
+  assert.doesNotMatch(h.element('#app').innerHTML,/group-selector|Lembrete interno fictício|Editar|Novo publicador/);
+});
+
+test('publisher boundary rejects extra people, foreign reports and internal notes before rendering',async()=>{
+  for(const contaminate of [s=>s.people.push({...s.people[0],id:'p_foreign',name:'Pessoa restrita'}),s=>{s.reports[s.activeMonth]={p_foreign:report()};},s=>{s.people[0].notes='Nota restrita';},s=>{s.reports[s.activeMonth]={p_fixture:report({notes:'Nota restrita'})};},s=>{s.reminders[s.activeMonth]={p_fixture:{at:new Date().toISOString(),count:1}};}]) {
+    const s=fixture();contaminate(s);const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:s})});await flush();
+    assert.equal(h.window.EmDiaApp.getState(),null);assert.equal(h.window.EmDiaApp.getCloudStatus().blocked,true);assert.doesNotMatch(h.element('#app').innerHTML,/Pessoa restrita|Pessoa de Teste|Nota restrita|Baixar cópia/);
+  }
+});
+
+test('publisher cannot invoke group administration, backups, imports or manager writes',async()=>{
+  let accounts=0,transfers=0,fileReads=0;const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle(),publisherAccounts:async()=>{accounts++;return[];},transferGroups:async()=>{transfers++;return[];}});await flush();
+  for(const [a,id] of [['tab','people'],['tab','data'],['tab','users'],['tab','reviews'],['person-new'],['person-edit','p_fixture'],['roles','p_fixture'],['quick-receive','p_fixture'],['publisher-access','p_fixture'],['publisher-transfer','p_fixture'],['backup'],['recovery-copy'],['reset'],['import'],['demo']])h.click(a,id);
+  await h.submit('settings-form',{congregation:'forjado',reminder:'forjado'});
+  await h.element('#import-file').change({target:{files:[{size:1,text:async()=>{fileReads++;return'{}';}}],value:'fake.json'}});await flush();
+  assert.equal(h.window.EmDiaApp.getUI().tab,'my-card');assert.equal(h.saveCalls(),0);assert.equal(accounts,0);assert.equal(transfers,0);assert.equal(fileReads,0);assert.equal(h.downloads.length,0);assert.equal(h.element('#modal').open,false);
+});
+
+test('publisher first submission sends activity only and waits for confirmation before updating its card',async()=>{
+  let data=fixture(),calls=0,payload;const pending=deferred();const month=data.activeMonth;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),submitOwnReport:value=>{payload=C.clone(value);calls++;return pending.promise;}});await flush();
+  h.click('own-report');assert.doesNotMatch(h.element('#modal').innerHTML,/Observação interna|report-kind|received|Data de recebimento/);
+  const submit=h.submit('modal-form',{participated:'yes',hours:'999',studies:'2',notes:'forjado',kind:'regular',received:'on'});
+  assert.equal(calls,1);assert.equal(h.window.EmDiaApp.getCloudStatus().saving,true);assert.equal(C.getReport(h.window.EmDiaApp.getState(),'p_fixture',month),null);
+  assert.deepEqual(payload,{month,report:{participated:true,hours:null,studies:2},expectedVersion:0});
+  data.reports[month]={p_fixture:report({studies:2})};pending.resolve({status:'accepted',version:1});await submit;await flush();
+  assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.studies,2);assert.equal(h.saveCalls(),0);assert.equal(h.element('#modal').open,false);
+});
+
+test('publisher pending resubmission preserves the approved report and uses the current proposal version',async()=>{
+  const data=fixture(),month=data.activeMonth;data.reports[month]={p_fixture:report({studies:1})};let payload;
+  const revisions=[{id:'r_own',month,status:'pending',version:4,report:activity({studies:5}),submittedAt:null,reviewedAt:null}];
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data,revisions}),submitOwnReport:async value=>{payload=C.clone(value);return{status:'pending',version:5};}});await flush();
+  assert.match(h.element('#app').innerHTML,/aguarda decisão|Alteração em análise/);h.click('own-report');assert.match(h.element('#modal').innerHTML,/value="5"/);
+  await h.submit('modal-form',{participated:'no',studies:'0'});await flush();
+  assert.equal(payload.expectedVersion,4);assert.deepEqual(payload.report,{participated:false,hours:null,studies:0});assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.studies,1);
+});
+
+test('publisher conflict preserves form values, blocks retries and never offers a group backup',async()=>{
+  let submits=0;const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle(),submitOwnReport:async()=>{submits++;throw new errors.ConflictError();}});await flush();
+  h.click('own-report');h.input();await h.submit('modal-form',{participated:'yes',studies:'4'});await flush();
+  assert.equal(h.element('#modal').open,true);assert.equal(h.window.EmDiaApp.getCloudStatus().blocked,true);assert.match(h.element('#form-error').textContent,/Preserve os dados digitados/);assert.doesNotMatch(h.element('#app').innerHTML,/backup|Baixar cópia/);
+  await h.submit('modal-form',{participated:'yes',studies:'4'});assert.equal(submits,1);assert.equal(h.saveCalls(),0);
+});
+
+test('publisher validation preserves unknown participation with zero pioneer hours',async()=>{
+  const data=fixture();data.people[0].roles=[{kind:'regular',start:data.activeMonth,end:null}];let payload;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),submitOwnReport:async p=>{payload=C.clone(p);return{status:'accepted',version:1};}});await flush();
+  h.click('own-report');await h.submit('modal-form',{participated:'unknown',hours:'0',studies:''});await flush();assert.deepEqual(payload.report,{participated:null,hours:0,studies:null});
+  h.click('own-report');payload=null;await h.submit('modal-form',{participated:'yes',hours:'12,345',studies:0});assert.equal(payload,null);assert.match(h.element('#form-error').textContent,/duas casas decimais/);
+});
+
+test('publisher monthly navigation stays local, cancels drafts and rejects future months',async()=>{
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle()});await flush();const before=h.window.EmDiaApp.getUI().month;
+  h.click('own-report');h.input();h.confirm(false);h.click('prev-month');await flush();assert.equal(h.window.EmDiaApp.getUI().month,before);assert.equal(h.element('#modal').open,true);
+  h.confirm(true);h.click('prev-month');await flush();assert.equal(h.window.EmDiaApp.getUI().month,C.addMonth(before,-1));assert.equal(h.element('#modal').open,false);assert.equal(h.saveCalls(),0);
+  await h.change('active-month',C.addMonth(C.currentMonth(),1));assert.equal(h.window.EmDiaApp.getUI().month,C.addMonth(before,-1));
+});
+
+test('publisher annual consultation is fixed to own person and never offers a consolidated selector',async()=>{
+  const data=fixture();data.activeMonth='2024-10';data.people[0].startMonth='2024-01';data.reports['2024-01']={p_fixture:report({participated:false})};
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data})});await flush();h.click('person-annual','p_fixture');await flush();
+  assert.equal(h.window.EmDiaApp.reportSpec().rows.length,12);assert.match(h.window.EmDiaApp.reportSpec().title,/Pessoa de Teste/);assert.doesNotMatch(h.element('#app').innerHTML,/Todos — consolidado|id="report-person"|id="report-scope"/);
+  await h.change('report-person','all');await h.change('report-scope','pending');assert.equal(h.window.EmDiaApp.getUI().person,'p_fixture');assert.equal(h.window.EmDiaApp.getUI().reportScope,'all');
+  h.click('person-annual','p_foreign');await flush();assert.match(h.window.EmDiaApp.reportSpec().title,/Pessoa de Teste/);assert.equal(h.saveCalls(),0);
+});
+
+test('changing a publisher binding clears its old card before the replacement read finishes',async()=>{
+  let person='p_fixture';const second=deferred();const h=harness({profile:async()=>publisherProfile(person),readOwnCard:()=>person==='p_fixture'?Promise.resolve(ownBundle()):second.promise});await flush();
+  person='p_next';h.focus();await flush();assert.equal(h.window.EmDiaApp.getState(),null);assert.doesNotMatch(h.element('#app').innerHTML,/Pessoa de Teste/);
+  const data=fixture();data.people[0].id='p_next';data.people[0].name='Novo Cartão Fictício';second.resolve(ownBundle({state:data,personId:'p_next'}));await flush();assert.equal(h.window.EmDiaApp.getState().people[0].id,'p_next');
+});
+
+test('a publisher own-card response and pending submission cannot reopen data after sign-out',async()=>{
+  const send=deferred();const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle(),submitOwnReport:()=>send.promise});await flush();h.click('own-report');const submitted=h.submit('modal-form',{participated:'yes',studies:'1'});
+  h.auth('SIGNED_OUT',null);send.resolve({status:'accepted',version:1});await submitted;await flush();assert.equal(h.window.EmDiaApp.getState(),null);assert.equal(h.element('#modal').innerHTML,'');assert.doesNotMatch(h.element('#app').innerHTML,/Pessoa de Teste/);
+});
+
+test('manager review ignores the current proposal with CAS and retains the approved data',async()=>{
+  const data=fixture(),month=data.activeMonth;data.reports[month]={p_fixture:report({studies:1})};let decisions=[],pending=true;
+  const h=harness({read:async()=>({state:data,revision:7}),listRevisions:async()=>({revisions:pending?[pendingRevision()]:[],total:pending?1:0}),reviewRevision:async payload=>{decisions.push(C.clone(payload));pending=false;return{status:'ignored',version:3};}});await flush();
+  assert.match(h.element('#mobile-nav').innerHTML,/Revisões \(1\)/);h.click('tab','reviews');await flush();h.click('revision-review','revision_fixture');assert.match(h.element('#modal').innerHTML,/Relatório aprovado|Alteração enviada|Ignorar alteração/);
+  await h.submit('modal-form',{},'ignore');await flush();assert.deepEqual(decisions,[{revisionId:'revision_fixture',expectedVersion:2,decision:'ignore'}]);assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.studies,1);assert.match(h.element('#app').innerHTML,/Nenhuma alteração pendente/);assert.equal(h.saveCalls(),0);
+});
+
+test('manager acceptance reloads approved data and treats a missing approved report as unknown',async()=>{
+  let approved=false,payload;const h=harness({listRevisions:async()=>({revisions:approved?[]:[{...pendingRevision(),approvedReport:null}],total:approved?0:1}),reviewRevision:async value=>{payload=C.clone(value);approved=true;return{status:'accepted',version:3};}});await flush();
+  h.click('tab','reviews');await flush();h.click('revision-review','revision_fixture');assert.match(h.element('#modal').innerHTML,/Sem relatório aprovado neste mês/);await h.submit('modal-form');await flush();assert.equal(payload.decision,'accept');assert.match(h.element('#app').innerHTML,/Nenhuma alteração pendente/);
+});
+
+test('manager review conflict discards the stale decision and refreshes the proposal version',async()=>{
+  let version=2,calls=0;const h=harness({listRevisions:async()=>({revisions:[{...pendingRevision(),version}],total:1}),reviewRevision:async()=>{calls++;version=7;throw new errors.ConflictError();}});await flush();h.click('revision-review','revision_fixture');await h.submit('modal-form');await flush();
+  assert.equal(calls,1);assert.equal(h.element('#modal').open,false);h.click('revision-review','revision_fixture');assert.equal(h.element('#modal').open,true);assert.equal(h.saveCalls(),0);
+});
+
+test('late manager revision lists cannot display another group\'s proposal after a switch',async()=>{
+  const pending=deferred();const h=harness({listRevisions:id=>id==='group_a'?pending.promise:Promise.resolve({revisions:[],total:0})});await flush();h.click('group-open','group_b');await flush();pending.resolve({revisions:[{...pendingRevision(),personName:'Cartão do grupo anterior'}],total:1});await flush();h.click('tab','reviews');await flush();assert.doesNotMatch(h.element('#app').innerHTML,/Cartão do grupo anterior/);assert.doesNotMatch(h.element('#mobile-nav').innerHTML,/Revisões \(1\)/);
+});
+
+test('superintendent creates a publisher login only from an existing card and clears its password',async()=>{
+  let payload;const h=harness({profile:async()=>({userId:'owner',role:'superintendent',isAdmin:false,defaultGroupId:'group_a'}),createPublisherUser:async value=>{payload={...value};return{userId:'new_publisher'};}});await flush();
+  h.click('person-edit','p_fixture');assert.match(h.element('#modal').innerHTML,/Acesso do publicador|Transferir cartão/);h.click('publisher-access','p_fixture');await flush();h.element('#publisher-password').value='Segredo-ficticio-123';
+  await h.submit('modal-form',{email:'publicador@example.invalid',password:'Segredo-ficticio-123'});await flush();assert.deepEqual(payload,{email:'publicador@example.invalid',password:'Segredo-ficticio-123',groupId:'group_a',personId:'p_fixture'});assert.equal(h.element('#publisher-password').value,'');assert.equal(h.element('#modal').open,false);assert.equal(h.saveCalls(),0);
+});
+
+test('existing publisher accounts are shown without creating duplicates or exposing user identifiers',async()=>{
+  let creates=0;const h=harness({publisherAccounts:async()=>[{personId:'p_fixture',userId:'internal_user_id'}],createPublisherUser:async()=>{creates++;}});await flush();h.click('publisher-access','p_fixture');await flush();assert.match(h.element('#modal').innerHTML,/Já existe um acesso/);assert.doesNotMatch(h.element('#modal').innerHTML,/publisher-password|internal_user_id/);await h.submit('modal-form',{email:'test@example.invalid',password:'Segredo-ficticio-123'});assert.equal(creates,0);
+});
+
+test('an account lookup cannot open a previous group card after sign-out',async()=>{
+  const pending=deferred();const h=harness({publisherAccounts:()=>pending.promise});await flush();h.click('publisher-access','p_fixture');await flush();h.auth('SIGNED_OUT',null);pending.resolve([]);await flush();assert.equal(h.element('#modal').open,false);assert.equal(h.element('#modal').innerHTML,'');
+});
+
+test('card transfer requires an explicit destination and acknowledgement then reloads only source group',async()=>{
+  let moved=false,payload;const reads=[];const h=harness({read:async id=>{reads.push(id);return{state:moved?C.emptyState():fixture(),revision:7};},transferPublisher:async value=>{payload=C.clone(value);moved=true;return{fromRevision:8,toRevision:3};}});await flush();h.click('publisher-transfer','p_fixture');await flush();assert.match(h.element('#modal').innerHTML,/histórico|Escolha o grupo/);
+  await h.submit('modal-form',{toGroupId:'group_b'});assert.equal(payload,undefined);await h.submit('modal-form',{toGroupId:'group_a',agree:'on'});assert.equal(payload,undefined);
+  await h.submit('modal-form',{toGroupId:'group_b',agree:'on'});await flush();assert.deepEqual(payload,{fromGroupId:'group_a',toGroupId:'group_b',personId:'p_fixture',expectedRevision:7});assert.deepEqual(reads,['group_a','group_a']);assert.equal(h.window.EmDiaApp.getState().people.length,0);assert.equal(h.saveCalls(),0);
+});
+
+test('administrator user settings show three roles and require explicit promotion of a publisher',async()=>{
+  let assigned;const h=harness({listUsers:async()=>({users:[{id:'a',email:'admin@example.invalid',role:'admin',groupId:'group_a'},{id:'s',email:'gestor@example.invalid',role:'superintendent',groupId:'group_a'},{id:'p',email:'publicador@example.invalid',role:'publisher',groupId:'group_a'}]}),assignUser:async value=>{assigned=C.clone(value);return{ok:true};}});await flush();h.click('tab','users');await flush();assert.match(h.element('#app').innerHTML,/Administrador|Superintendente|Publicador/);h.click('user-assign','p');assert.match(h.element('#modal').innerHTML,/Transferir cartão|Escolha o novo perfil/);
+  await h.submit('modal-form',{groupMode:'existing',groupId:'group_b',role:'publisher'});assert.equal(assigned,undefined);await h.submit('modal-form',{groupMode:'existing',groupId:'group_b'});assert.equal(assigned,undefined);await h.submit('modal-form',{groupMode:'existing',groupId:'group_a',role:'superintendent'});await flush();assert.deepEqual(assigned,{userId:'p',role:'superintendent',groupId:'group_a'});
+});
+
+test('self demotion closes the administrator list and group picker before the new profile loads',async()=>{
+  let role='admin';const profileRead=deferred();let calls=0;const h=harness({profile:()=>++calls===1?Promise.resolve({userId:'owner',role,isAdmin:true,defaultGroupId:'group_a'}):profileRead.promise,listUsers:async()=>({users:[{id:'owner',email:'admin@example.invalid',role:'admin',groupId:'group_a'}]}),assignUser:async()=>{role='superintendent';return{group:{id:'group_a'}};}});await flush();h.click('tab','users');await flush();h.click('user-assign','owner');const submit=h.submit('modal-form',{groupMode:'existing',groupId:'group_a',role:'superintendent'});await flush();
+  assert.equal(h.window.EmDiaApp.getState(),null);assert.equal(h.window.EmDiaApp.getGroups().length,0);assert.doesNotMatch(h.element('#app').innerHTML,/admin@example.invalid|group-selector/);profileRead.resolve({userId:'owner',role,isAdmin:false,defaultGroupId:'group_a'});await submit;await flush();assert.equal(h.window.EmDiaApp.getUI().tab,'checklist');assert.doesNotMatch(h.element('#mobile-nav').innerHTML,/Usuários/);
+});
+
+test('publisher own-card responses arriving after sign-out remain private',async()=>{
+  const card=deferred();const h=harness({profile:async()=>publisherProfile(),readOwnCard:()=>card.promise});await flush();h.auth('SIGNED_OUT',null);card.resolve(ownBundle());await flush();assert.equal(h.window.EmDiaApp.getState(),null);assert.equal(h.window.EmDiaApp.getSelectedGroup(),null);assert.doesNotMatch(h.element('#app').innerHTML,/Pessoa de Teste/);
+});
+
+test('publisher without a card binding waits for assignment without reading any group state',async()=>{
+  let ownReads=0,groups=0;const h=harness({profile:async()=>publisherProfile(null),readOwnCard:async()=>{ownReads++;},groups:async()=>{groups++;return[];}});await flush();assert.equal(ownReads,0);assert.equal(groups,0);assert.equal(h.window.EmDiaApp.getState(),null);assert.match(h.element('#app').innerHTML,/vincular seu acesso ao seu cartão/);
+});
+
+test('an unchanged legacy publisher submission with version zero is accepted without a manager save',async()=>{
+  const data=fixture(),month=data.activeMonth;data.reports[month]={p_fixture:report()};let payload;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),submitOwnReport:async value=>{payload=C.clone(value);return{status:'accepted',version:0,unchanged:true};}});await flush();h.click('own-report');await h.submit('modal-form',{participated:'yes',studies:1});await flush();assert.equal(payload.expectedVersion,0);assert.equal(h.element('#modal').open,false);assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.studies,1);assert.equal(h.saveCalls(),0);
+});
+
+test('publisher access failure erases the password and never retries automatically',async()=>{
+  let creates=0;const h=harness({createPublisherUser:async()=>{creates++;throw new errors.CloudError('Falha fictícia');}});await flush();h.click('publisher-access','p_fixture');await flush();h.element('#publisher-password').value='Segredo-ficticio-123';await h.submit('modal-form',{email:'publicador@example.invalid',password:'Segredo-ficticio-123'});await flush();assert.equal(creates,1);assert.equal(h.element('#publisher-password').value,'');assert.equal(h.element('#modal').open,true);assert.equal(h.window.EmDiaApp.getCloudStatus().adminBusy,false);assert.doesNotMatch(h.element('#modal').innerHTML,/Segredo-ficticio-123/);
+});
+
+test('provisioning a publisher login reloads the group revision before later manager writes',async()=>{
+  let revision=7;const writes=[];const h=harness({read:async()=>({state:fixture(),revision}),createPublisherUser:async()=>{revision=8;return{userId:'publisher_user'};},save:async(state,expected)=>{writes.push(expected);return{state,revision:9};}});await flush();h.click('publisher-access','p_fixture');await flush();await h.submit('modal-form',{email:'publicador@example.invalid',password:'Segredo-ficticio-123'});await flush();assert.equal(h.window.EmDiaApp.getCloudStatus().revision,8);h.click('quick-receive','p_fixture');await flush();assert.deepEqual(writes,[8]);
+});
+
+test('opening help can preserve unsent own activities when discard is cancelled',async()=>{
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle()});await flush();h.click('own-report');h.input();h.confirm(false);h.click('help');await flush();assert.match(h.element('#modal').innerHTML,/Enviar atividades/);assert.doesNotMatch(h.element('#modal').innerHTML,/Como usar meu cartão/);
 });
