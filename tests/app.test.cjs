@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const test = require('node:test');
 const C = require('../assets/core.js');
+const PDF = require('../assets/pdf.js');
 const errors = require('../assets/cloud.js');
 const appCode = fs.readFileSync(require.resolve('../assets/app.js'), 'utf8');
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return {promise,resolve,reject}; };
@@ -13,12 +14,12 @@ function fixture() {
   state.people.push({id:'p_fixture',name:'Pessoa de Teste',startMonth:state.activeMonth,endMonth:null,notes:'',roles:[]});
   return state;
 }
-function harness(overrides={}) {
-  const elements = new Map(), docEvents = new Map(), winEvents = new Map();
+function harness(overrides={},options={}) {
+  const elements = new Map(), docEvents = new Map(), winEvents = new Map(), downloads = [];
   function element(selector='') {
     if (elements.has(selector)) return elements.get(selector);
     const el={innerHTML:'',textContent:'',style:{},dataset:{},disabled:false,open:false,hidden:false,isConnected:true,value:'',
-      append(){},remove(){},focus(){},select(){},scrollIntoView(){},checkValidity(){return true;},
+      append(){},remove(){},focus(){},select(){},click(){},scrollIntoView(){},checkValidity(){return true;},
       showModal(){this.open=true;},close(){this.open=false;},addEventListener(name,fn){this[name]=fn;}};
     elements.set(selector,el); return el;
   }
@@ -33,10 +34,11 @@ function harness(overrides={}) {
     save:async state=>({state,revision:8,updatedAt:null}),login:async()=>({sent:true}),loginPassword:async()=>({signedIn:true}),
     logout:async()=>{},subscribeAuth(fn){authCallback=fn;return()=>{};},...overrides};
   const originalSave=cloud.save;cloud.save=(...args)=>{saveCalls++;return originalSave(...args);};
-  const window={EmDiaCore:C,EMDIA_CLOUD_CONFIG:{url:'https://example.invalid',publishableKey:'test-public-key'},
+  const window={EmDiaCore:options.core||C,EMDIA_CLOUD_CONFIG:{url:'https://example.invalid',publishableKey:'test-public-key'},
     supabase:{createClient:()=>({})},EmDiaCloud:{...errors,create:()=>cloud},
     scrollTo(){},addEventListener(name,fn){winEvents.set(name,fn);}};
-  const context={window,document,console,URL,Blob,Date,Number,String,Object,Array,Error,Promise,
+  const TestURL=class extends URL {static createObjectURL(blob){downloads.push(blob);return 'blob:fixture';}static revokeObjectURL(){}};
+  const context={window,document,console,URL:TestURL,Blob,Date,Number,String,Object,Array,Error,Promise,
     navigator:{},confirm:()=>confirmResult,setTimeout:()=>1,
     FormData:class {constructor(form){this.values=new Map(Object.entries(form.fields||{}));}get(k){return this.values.get(k)||null;}has(k){return this.values.has(k);}},
     localStorage:new Proxy({}, {get(){throw Error('Application attempted to access local records');}})};
@@ -45,7 +47,7 @@ function harness(overrides={}) {
   function submit(id,fields={},value='') {return docEvents.get('submit')({target:{id,fields},submitter:{value},preventDefault(){}});}
   function change(id,value){const target=element('#'+id);target.id=id;target.value=value;return docEvents.get('change')({target});}
   function input(form='#modal-form') {docEvents.get('input')({target:{id:'person-name',closest:s=>s===form}});}
-  return {window,cloud,elements,element,click,submit,input,change,navigator:context.navigator,confirm(value){confirmResult=value;},saveCalls:()=>saveCalls,
+  return {window,cloud,elements,element,click,submit,input,change,downloads,navigator:context.navigator,confirm(value){confirmResult=value;},saveCalls:()=>saveCalls,
     auth(event,session){currentSession=session;authCallback(event,session);},
     focus(){winEvents.get('focus')();},visibility(){docEvents.get('visibilitychange')?.();}};
 }
@@ -394,4 +396,108 @@ test('an admin can change their startup assignment without changing the group be
   assert.equal(h.window.EmDiaApp.getProfile().defaultGroupId,'group_b');assert.equal(h.window.EmDiaApp.getSelectedGroup().id,'group_a');
   h.auth('SIGNED_OUT',null);h.auth('SIGNED_IN',{user:{id:'owner'}});await flush();
   assert.equal(h.window.EmDiaApp.getSelectedGroup().id,'group_b');assert.equal(h.window.EmDiaApp.getUI().tab,'checklist');
+});
+
+test('each annual shortcut selects its publisher and reference year without writing records',async()=>{
+  const data=fixture();data.activeMonth='2024-10';data.people[0].startMonth='2024-01';
+  data.people.push({...data.people[0],id:'p_other',name:'Outra Pessoa Fictícia'});
+  data.reports['2024-01']={p_fixture:{received:true,kind:'publisher',participated:true,hours:null,studies:1,notes:'',receivedDate:null,updatedAt:null},
+    p_other:{received:true,kind:'publisher',participated:true,hours:null,studies:900,notes:'',receivedDate:null,updatedAt:null}};
+  const h=harness({read:async()=>({state:data,revision:7})});await flush();h.click('tab','people');await flush();
+  const cards=h.element('#app').innerHTML;
+  assert.match(cards,/profile-actions/);assert.match(cards,/aria-label="Ver relatório anual de Pessoa de Teste"/);
+  assert.match(cards,/title="Ver relatório anual de Pessoa de Teste"/);
+  assert.ok(cards.indexOf('data-action="person-annual"')<cards.indexOf('data-action="roles"'));
+  assert.equal((cards.match(/data-action="person-annual"/g)||[]).length,2);
+  await h.change('report-cycle','service');await h.change('report-year','2001');
+  const before=JSON.stringify(h.window.EmDiaApp.getState());h.click('person-annual','p_fixture');await flush();
+  const ui=h.window.EmDiaApp.getUI(),spec=h.window.EmDiaApp.reportSpec();
+  assert.equal(ui.tab,'reports');assert.equal(ui.reportMode,'annual');assert.equal(ui.person,'p_fixture');
+  assert.equal(ui.year,2024);assert.equal(ui.cycle,'civil');assert.equal(ui.month,'2024-10');
+  assert.equal(spec.rows.length,12);assert.equal(spec.title,'Relatório anual · Pessoa de Teste');assert.equal(spec.rows[0][5],'1');
+  assert.doesNotMatch(spec.summary,/900/);assert.equal(h.saveCalls(),0);
+  assert.equal(JSON.stringify(h.window.EmDiaApp.getState()),before);
+});
+
+test('an individual year preserves monthly history and never treats a missing report as inactivity',async()=>{
+  const data=fixture(),p=data.people[0];data.activeMonth='2026-10';p.startMonth='2026-03';
+  p.roles=[{kind:'regular',start:'2026-03',end:'2026-04'},{kind:'auxiliary',start:'2026-06',end:'2026-06'}];
+  const entry=(kind,participated,hours,studies,received=true)=>({received,kind,participated,hours,studies,notes:'Observação interna fictícia',receivedDate:null,updatedAt:null});
+  data.reports={
+    '2026-03':{p_fixture:entry('auxiliary',true,15,1)},
+    '2026-04':{p_fixture:entry('regular',null,0,0)},
+    '2026-05':{p_fixture:entry('publisher',false,null,0)},
+    '2026-06':{p_fixture:entry('auxiliary',null,null,null)},
+    '2026-07':{p_fixture:entry('publisher',false,null,0,false)},
+    '2026-08':{p_fixture:entry('publisher',false,null,null)}
+  };
+  const core={...C,annualSummary:(state,person,months)=>C.annualSummary(state,person,months,'2026-11')};
+  const h=harness({read:async()=>({state:data,revision:7})},{core});await flush();h.click('person-annual','p_fixture');await flush();
+  const spec=h.window.EmDiaApp.reportSpec(),rows=JSON.parse(JSON.stringify(spec.rows));
+  assert.equal(rows.length,12);assert.equal(rows[0][2],'Sem acompanhamento');
+  assert.equal(rows[2][1],'P. auxiliar');assert.equal(rows[2][3],'Sim');assert.equal(rows[2][4],'15');
+  assert.equal(rows[3][1],'P. regular');assert.equal(rows[3][2],'Recebido');assert.equal(rows[3][3],'Não informado');assert.equal(rows[3][4],'0');
+  assert.equal(rows[4][2],'Recebido · sem participação');assert.equal(rows[4][3],'Não');
+  assert.equal(rows[5][2],'Recebido: conferir');assert.equal(rows[5][4],'Não informado');assert.equal(rows[5][5],'Não informado');
+  assert.equal(rows[6][2],'Pendente');assert.equal(rows[6][3],'—');
+  assert.equal(rows[7][2],'Recebido: conferir · sem participação');
+  assert.equal(rows[10][2],'Em andamento');assert.equal(rows[11][2],'Mês futuro');
+  assert.match(spec.summary,/15\*h informadas/);assert.match(spec.summary,/1\* registros de estudos/);
+  assert.match(spec.notes.join(' '),/Não entregue não significa falta de participação ou inatividade/);
+  assert.match(spec.notes.join(' '),/tipo vem dos períodos cadastrados/);
+  assert.doesNotMatch(JSON.stringify(spec),/Observação interna fictícia/);
+  const pdf=PDF.build(spec);assert.ok(pdf.pages>=1);assert.equal(Buffer.from(pdf.bytes).subarray(0,8).toString(),'%PDF-1.4');
+  assert.equal(h.saveCalls(),0);
+});
+
+test('invalid annual targets and a cancelled discard preserve the open publisher draft',async()=>{
+  const h=harness();await flush();h.click('tab','people');await flush();h.click('person-edit','p_fixture');h.input();
+  const before=JSON.stringify(h.window.EmDiaApp.getUI()),form=h.element('#modal').innerHTML;
+  h.click('person-annual','missing_person');await flush();
+  assert.equal(JSON.stringify(h.window.EmDiaApp.getUI()),before);assert.equal(h.element('#modal').innerHTML,form);assert.equal(h.element('#modal').open,true);
+  h.confirm(false);h.click('person-annual','p_fixture');await flush();
+  assert.equal(JSON.stringify(h.window.EmDiaApp.getUI()),before);assert.equal(h.element('#modal').open,true);assert.equal(h.element('#modal').innerHTML,form);
+  h.confirm(true);h.click('person-annual','p_fixture');await flush();
+  assert.equal(h.window.EmDiaApp.getUI().tab,'reports');assert.equal(h.element('#modal').open,false);assert.equal(h.saveCalls(),0);
+});
+
+test('annual consultation preserves a failed save candidate and its recovery download',async()=>{
+  const h=harness({save:async()=>{throw new errors.CloudError('Falha fictícia de conexão');}});await flush();
+  const before=JSON.stringify(h.window.EmDiaApp.getState()),month=h.window.EmDiaApp.getUI().month;
+  h.click('quick-receive','p_fixture');await flush();assert.equal(h.window.EmDiaApp.getCloudStatus().blocked,true);
+  h.click('person-annual','p_fixture');await flush();
+  assert.equal(h.window.EmDiaApp.getUI().tab,'reports');assert.equal(h.window.EmDiaApp.getCloudStatus().blocked,true);
+  assert.match(h.element('#app').innerHTML,/Baixar alteração não confirmada/);assert.equal(JSON.stringify(h.window.EmDiaApp.getState()),before);
+  h.click('recovery-copy');await flush();assert.equal(h.downloads.length,1);
+  const recovered=JSON.parse(await h.downloads[0].text());assert.equal(recovered.reports[month].p_fixture.received,true);
+  assert.equal(h.saveCalls(),1);
+});
+
+test('annual shortcuts wait for an active group read or save to finish',async()=>{
+  const read=deferred(),save=deferred();let candidate;
+  const h=harness({read:()=>read.promise,save:state=>{candidate=state;return save.promise;}});await flush();
+  h.click('person-annual','p_fixture');await flush();assert.equal(h.window.EmDiaApp.getUI().tab,'checklist');assert.equal(h.window.EmDiaApp.getState(),null);
+  read.resolve({state:fixture(),revision:7});await flush();h.click('quick-receive','p_fixture');await flush();
+  h.click('person-annual','p_fixture');await flush();assert.equal(h.window.EmDiaApp.getUI().tab,'checklist');
+  save.resolve({state:candidate,revision:8});await flush();h.click('person-annual','p_fixture');await flush();
+  assert.equal(h.window.EmDiaApp.getUI().tab,'reports');assert.equal(h.saveCalls(),1);
+});
+
+test('an annual selection is cleared by group switches and sign-out',async()=>{
+  const h=harness({read:async id=>({state:groupFixture(id==='group_a'?'a':'b'),revision:1})});await flush();
+  h.click('person-annual','p_a');await flush();assert.equal(h.window.EmDiaApp.getUI().person,'p_a');
+  h.click('group-open','group_b');await flush();assert.equal(h.window.EmDiaApp.getUI().person,'all');
+  h.click('person-annual','p_a');await flush();assert.equal(h.window.EmDiaApp.getUI().tab,'checklist');
+  assert.doesNotMatch(h.element('#app').innerHTML,/Pessoa fictícia A/);
+  h.click('person-annual','p_b');await flush();assert.equal(h.window.EmDiaApp.getUI().person,'p_b');
+  h.auth('SIGNED_OUT',null);h.click('person-annual','p_b');await flush();
+  assert.equal(h.window.EmDiaApp.getUI().person,'all');assert.equal(h.window.EmDiaApp.reportSpec(),null);
+  assert.doesNotMatch(h.element('#app').innerHTML,/Pessoa fictícia B/);
+});
+
+test('the annual shortcut keeps the report year within the existing supported range',async()=>{
+  const data=fixture();data.activeMonth='2199-12';
+  const h=harness({read:async()=>({state:data,revision:7})});await flush();h.click('person-annual','p_fixture');await flush();
+  assert.equal(h.window.EmDiaApp.getUI().year,2198);assert.equal(h.window.EmDiaApp.getUI().month,'2199-12');
+  assert.equal(h.window.EmDiaApp.reportSpec().rows.length,12);assert.equal(h.saveCalls(),0);
 });
