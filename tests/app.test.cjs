@@ -826,3 +826,72 @@ test('a late final diary submission cannot reopen the card or diary after sign-o
   const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>{reads++;return hoursBundle(requested,requested===month?{[month+'-01']:60}:{});},submitOwnHours:()=>pending.promise});await flush();await h.change('active-month',month);await flush();h.click('own-hours-submit');const submitted=h.submit('modal-form',{studies:'1'}),before=reads;
   h.auth('SIGNED_OUT',null);pending.resolve({status:'accepted',version:1,hoursVersion:1,totalMinutes:60});await submitted;await flush();assert.equal(h.window.EmDiaApp.getState(),null);assert.equal(reads,before);assert.equal(h.element('#modal').innerHTML,'');assert.doesNotMatch(h.element('#app').innerHTML,/Diário de horas|Pessoa de Teste/);
 });
+
+function monthlyGoalMarkup(h){
+  return h.element('#app').innerHTML.match(/<div class="hours-goal"[\s\S]*?<\/div>(?=<p class="help">Salve)/)?.[0]||'';
+}
+
+test('regular monthly progress uses only saved diary minutes and performs no writes',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday();let diaryWrites=0,reportWrites=0;
+  data.reports[month]={p_fixture:report({kind:'regular',hours:62.5})};
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>hoursBundle(month,{[date]:320}),saveOwnHours:async()=>{diaryWrites++;},submitOwnHours:async()=>{reportWrites++;}});await flush();
+  const goal=monthlyGoalMarkup(h);assert.match(goal,/Meta mensal/);assert.match(goal,/>50h</);assert.match(goal,/Registradas no diário/);assert.match(goal,/5h20/);assert.match(goal,/44h40/);assert.match(goal,/10,7% da meta/);
+  assert.match(goal,/incluindo hoje/);assert.match(goal,/role="progressbar"/);assert.match(goal,/aria-valuenow="10.7"/);assert.doesNotMatch(goal,/62,5|600h|Meta anual/);
+  assert.equal(diaryWrites,0);assert.equal(reportWrites,0);assert.equal(h.saveCalls(),0);assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,62.5);
+});
+
+test('auxiliary pioneer months keep their diary summary without the regular target',async()=>{
+  const data=pioneerFixture('auxiliary'),month=testToday().slice(0,7);
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>hoursBundle(month,{[testToday()]:320},{kind:'auxiliary'})});await flush();
+  assert.match(h.element('#app').innerHTML,/5h20/);assert.equal(monthlyGoalMarkup(h),'');assert.doesNotMatch(h.element('#app').innerHTML,/Meta mensal|Média necessária|% da meta/);assert.equal(h.saveCalls(),0);
+});
+
+test('loading and failed diary reads never display a fabricated zero goal and can recover',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),pending=deferred();let reads=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:()=>++reads===1?pending.promise:Promise.resolve(hoursBundle(month,{[testToday()]:320}))});await flush();
+  assert.equal(monthlyGoalMarkup(h),'');assert.doesNotMatch(h.element('#app').innerHTML,/0% da meta|class="hours-goal-progress"/);assert.match(h.element('#app').innerHTML,/Carregando diário/);
+  pending.reject(new errors.CloudError('Test unavailable'));await flush();assert.equal(monthlyGoalMarkup(h),'');assert.match(h.element('#app').innerHTML,/Não foi possível carregar o diário/);
+  h.click('own-hours-refresh');await flush();assert.match(monthlyGoalMarkup(h),/5h20|44h40/);assert.equal(reads,2);assert.equal(h.saveCalls(),0);
+});
+
+test('a closed month without diary entries has a neutral target even when an approved total exists',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth;data.reports[month]={p_fixture:report({kind:'regular',hours:62.5})};
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data})});await flush();await h.change('active-month',month);await flush();
+  const goal=monthlyGoalMarkup(h);assert.match(goal,/Meta mensal/);assert.match(goal,/>50h</);assert.match(goal,/Sem lançamentos no diário neste mês/);
+  assert.doesNotMatch(goal,/Faltam|Faltaram|0h00|progressbar|% da meta|\/dia/);assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,62.5);assert.equal(h.saveCalls(),0);
+});
+
+test('an explicitly zero closed diary shows its recorded shortfall without a future daily pace',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>hoursBundle(requested,requested===month?{[month+'-01']:0}:{})});await flush();await h.change('active-month',month);await flush();
+  const goal=monthlyGoalMarkup(h);assert.match(goal,/Faltaram/);assert.match(goal,/50h00/);assert.match(goal,/0% da meta/);assert.match(goal,/Mês encerrado/);assert.doesNotMatch(goal,/Sem lançamentos|\/dia|incluindo hoje/);
+});
+
+test('exact target and surplus show achieved progress with a capped accessible bar',async()=>{
+  for(const [total,percent,excess] of [[3000,'100',''],[3200,'106,7','3h20']]){
+    const data=pioneerFixture(),month=data.activeMonth,entries={[month+'-01']:1440,[month+'-02']:1440,[month+'-03']:total-2880};
+    const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>hoursBundle(requested,requested===month?entries:{})});await flush();await h.change('active-month',month);await flush();
+    const goal=monthlyGoalMarkup(h);assert.match(goal,/Meta de horas atingida/);assert.ok(goal.includes(percent+'% da meta'));assert.match(goal,/aria-valuenow="100"/);assert.match(goal,/width:100%/);assert.doesNotMatch(goal,/\/dia|incluindo hoje|width:106/);
+    if(excess)assert.ok(goal.includes(excess+' além da meta.'));else assert.doesNotMatch(goal,/além da meta/);assert.equal(h.saveCalls(),0);
+  }
+});
+
+test('one remaining minute is never labelled as a completed monthly target',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth,entries={[month+'-01']:1440,[month+'-02']:1440,[month+'-03']:119};
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>hoursBundle(requested,requested===month?entries:{})});await flush();await h.change('active-month',month);await flush();
+  const goal=monthlyGoalMarkup(h);assert.match(goal,/49h59/);assert.match(goal,/0h01/);assert.match(goal,/99,9% da meta/);assert.match(goal,/aria-valuenow="99.9"/);assert.doesNotMatch(goal,/Meta de horas atingida|>100% da meta/);
+});
+
+test('the dashboard changes only after a day save is confirmed and stays out of the group state',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday(),pending=deferred();
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>hoursBundle(month,{[date]:320}),saveOwnHours:()=>pending.promise});await flush();
+  h.click('own-hours-edit',date);const submitted=h.submit('modal-form',{dayHours:'2'});assert.match(monthlyGoalMarkup(h),/5h20|44h40/);
+  pending.resolve(hoursBundle(month,{[date]:120},{version:2}));await submitted;await flush();const goal=monthlyGoalMarkup(h);assert.match(goal,/2h00/);assert.match(goal,/48h00/);assert.doesNotMatch(goal,/5h20/);assert.equal(h.saveCalls(),0);assert.equal(h.window.EmDiaApp.getState().people.length,1);
+});
+
+test('a blocked stale diary stops presenting monthly progress until a successful reload',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7);let reads=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>{if(++reads===2)throw new errors.CloudError('Test unavailable');return hoursBundle(month,{[testToday()]:320});}});await flush();
+  assert.match(monthlyGoalMarkup(h),/5h20/);h.click('own-hours-refresh');await flush();assert.equal(monthlyGoalMarkup(h),'');assert.match(h.element('#app').innerHTML,/Não foi possível carregar o diário/);
+  h.click('own-hours-refresh');await flush();assert.match(monthlyGoalMarkup(h),/44h40/);assert.equal(h.saveCalls(),0);
+});
