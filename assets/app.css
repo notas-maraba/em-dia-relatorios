@@ -174,3 +174,54 @@
   .group-context-admin>.btn{max-width:112px;min-height:44px;white-space:normal;padding:8px 6px}
   .group-context-admin>.btn svg{display:none}
 }
+
+/* Tighter spacing keeps the phone layout readable and every action touchable. */
+@media screen{
+  .header-inner{min-height:60px}
+  main{padding-top:12px!important;padding-bottom:calc(90px + env(safe-area-inset-bottom))!important}
+  .group-context{margin-bottom:10px}
+  .group-context-admin{padding-bottom:8px;gap:8px}
+  .group-context-admin .field>label{margin-bottom:3px}
+  .page-head{margin-bottom:11px}
+  .page-head>.btn{margin-top:10px}
+  .page-head .month-picker{margin-top:8px}
+  .month-picker{padding:2px;min-height:50px}
+  .hero{padding:14px 16px;min-height:110px;gap:6px}
+  .hero h2{margin-top:7px}
+  .hero p{margin-top:5px}
+  .hero .progress{margin-top:10px}
+  .stats{gap:8px;margin:10px 0 12px}
+  .stat{min-height:82px;padding:8px 12px}
+  .stat strong{margin-top:3px}
+  .stat small{margin-top:4px}
+  .source-note{margin:8px 0 10px}
+  .notice{margin:10px 0;padding:10px 12px}
+  .tools{margin-bottom:12px}
+  .search input{min-height:48px;padding-top:11px;padding-bottom:11px}
+  .search svg{top:15px}
+  .filters{margin-bottom:9px;padding-bottom:3px}
+  .list-head{margin-bottom:8px}
+  .people-list{gap:8px}
+  .person-card{padding:12px}
+  .person-data{margin-top:8px}
+  .person-actions{margin-top:8px;padding-top:8px}
+  .section-card{padding:15px;margin-bottom:12px}
+  .section-title{margin-bottom:12px}
+  .desktop-columns>.section-card{margin-bottom:12px}
+  .stack{gap:13px}
+  .spaced{margin-top:12px}
+  .divider{margin:16px 0}
+  .groups-grid{gap:10px}
+  .group-card{margin:0;gap:10px}
+  .report-tools{margin-top:12px}
+  .report-preview{margin-top:14px}
+  .toggle{margin-bottom:12px}
+  .toggle button{min-height:44px}
+  .welcome,.login-card{padding:22px 20px}
+  .mobile-nav{padding:6px 7px calc(6px + env(safe-area-inset-bottom))}
+  .mobile-nav button{min-height:48px;gap:3px}
+  dialog header{padding:16px 20px 12px}
+  .modal-body{padding:16px 20px}
+  dialog footer{padding:12px 20px calc(14px + env(safe-area-inset-bottom))}
+  #toasts{bottom:calc(78px + env(safe-area-inset-bottom))}
+}
