@@ -8,7 +8,9 @@ O primeiro envio de atividade do publicador é recebido automaticamente. Altera�
 
 O diário de horas dos meses de pioneiro é separado dos relatórios recebidos. Somente o publicador vinculado ao cartão consulta e edita seus lançamentos diários pelas funções autorizadas. Administradores e superintendentes recebem o total mensal enviado, sem consulta ao diário por esse acesso. Trocar o login vinculado preserva o diário do cartão; transferir o cartão move o diário junto. Os registros não são gravados no JSON da base do grupo, no cache do aplicativo ou no repositório.
 
-Salvar um dia não envia o relatório. O envio exige mês encerrado e usa a soma calculada no banco, com controle de versões para evitar totais desatualizados. Remover um lançamento diário não remove um relatório recebido. O backup JSON do grupo não contém o diário privado; sua cópia de segurança exige uma exportação privada do banco por administração confiável.
+Vários lançamentos na mesma data permanecem como registros separados. A soma por dia e por mês é conferida no banco. Cada edição ou exclusão exige o acesso vinculado ao cartão e a versão atual do diário. Repetir a mesma requisição identificada não acrescenta outro registro. Clientes antigos não podem substituir silenciosamente um dia que já tenha vários lançamentos.
+
+Salvar um lançamento não envia o relatório. O envio exige mês encerrado e usa a soma calculada no banco, com controle de versões para evitar totais desatualizados. Remover um lançamento diário não remove um relatório recebido. O backup JSON do grupo não contém o diário privado; sua cópia de segurança exige uma exportação privada do banco por administração confiável.
 
 A chave publishable e a URL são identificadores públicos. Não dão acesso aos dados por si só. Nunca publique senha, chave secreta ou service_role.
 
