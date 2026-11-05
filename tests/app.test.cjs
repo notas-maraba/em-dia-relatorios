@@ -9,6 +9,7 @@ const errors = require('../assets/cloud.js');
 const appCode = fs.readFileSync(require.resolve('../assets/app.js'), 'utf8');
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return {promise,resolve,reject}; };
 const flush = () => new Promise(resolve => setImmediate(() => setImmediate(resolve)));
+const testToday=()=>new Intl.DateTimeFormat('sv-SE',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 function fixture() {
   const state = C.emptyState();
   state.people.push({id:'p_fixture',name:'Pessoa de Teste',startMonth:state.activeMonth,endMonth:null,notes:'',roles:[]});
@@ -29,7 +30,7 @@ function harness(overrides={},options={}) {
   let currentSession={user:{id:'owner'}}, authCallback, saveCalls=0,confirmResult=true;
   const defaultGroups=[{id:'group_a',name:'Grupo de Teste A',createdAt:null},{id:'group_b',name:'Grupo de Teste B',createdAt:null}];
   const cloud={session:async()=>currentSession,profile:async()=>({userId:currentSession?.user.id,isAdmin:true,role:'admin',defaultGroupId:'group_a'}),
-    groups:async()=>defaultGroups,listRevisions:async()=>({revisions:[],total:0}),publisherAccounts:async()=>[],transferGroups:async()=>defaultGroups,createPublisherUser:async()=>({userId:'publisher_user'}),transferPublisher:async()=>({}),
+    groups:async()=>defaultGroups,listRevisions:async()=>({revisions:[],total:0}),publisherAccounts:async()=>[],transferGroups:async()=>defaultGroups,createPublisherUser:async()=>({userId:'publisher_user'}),transferPublisher:async()=>({}),readOwnHours:async month=>hoursBundle(month),
     createGroup:async name=>({id:'group_c',name}),listUsers:async()=>({users:[]}),createUser:async()=>({ok:true}),assignUser:async()=>({ok:true}),read:async()=>({state:fixture(),revision:7,updatedAt:null}),
     save:async state=>({state,revision:8,updatedAt:null}),login:async()=>({sent:true}),loginPassword:async()=>({signedIn:true}),
     logout:async()=>{},subscribeAuth(fn){authCallback=fn;return()=>{};},...overrides};
@@ -508,6 +509,14 @@ function ownBundle({state=fixture(),revisions=[],personId='p_fixture',groupId='g
   state=C.clone(state);state.settings.reminder='';
   return {groupId,personId,group:{id:groupId,name:'Grupo privado fictício',createdAt:null},state,revision:7,updatedAt:null,revisions};
 }
+function hoursBundle(month,entries={},changes={}) {
+  return {groupId:'group_a',personId:'p_fixture',month,kind:'regular',entries:{...entries},version:Object.keys(entries).length?1:0,
+    totalMinutes:Object.values(entries).reduce((total,value)=>total+value,0),closed:month<testToday().slice(0,7),today:testToday(),updatedAt:null,...changes};
+}
+function pioneerFixture(kind='regular') {
+  const data=fixture();data.activeMonth=C.addMonth(C.currentMonth(),-1);data.people[0].startMonth=C.addMonth(data.activeMonth,-1);
+  data.people[0].roles=[{kind,start:data.people[0].startMonth,end:null}];return data;
+}
 const activity=(changes={})=>({kind:'publisher',participated:true,hours:null,studies:1,...changes});
 const report=(changes={})=>({received:true,...activity(),notes:'',receivedDate:null,updatedAt:null,...changes});
 const pendingRevision=()=>({id:'revision_fixture',version:2,personId:'p_fixture',personName:'Pessoa de Teste',month:C.emptyState().activeMonth,approvedReport:activity(),proposedReport:activity({studies:3}),submittedAt:null});
@@ -565,8 +574,9 @@ test('publisher conflict preserves form values, blocks retries and never offers 
 });
 
 test('publisher validation preserves unknown participation with zero pioneer hours',async()=>{
-  const data=fixture();data.people[0].roles=[{kind:'regular',start:data.activeMonth,end:null}];let payload;
+  const data=fixture(),month=C.addMonth(data.activeMonth,-1);data.people[0].startMonth=month;data.people[0].roles=[{kind:'regular',start:month,end:null}];let payload;
   const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),submitOwnReport:async p=>{payload=C.clone(p);return{status:'accepted',version:1};}});await flush();
+  await h.change('active-month',month);await flush();
   h.click('own-report');await h.submit('modal-form',{participated:'unknown',hours:'0',studies:''});await flush();assert.deepEqual(payload.report,{participated:null,hours:0,studies:null});
   h.click('own-report');payload=null;await h.submit('modal-form',{participated:'yes',hours:'12,345',studies:0});assert.equal(payload,null);assert.match(h.element('#form-error').textContent,/duas casas decimais/);
 });
@@ -671,4 +681,148 @@ test('provisioning a publisher login reloads the group revision before later man
 
 test('opening help can preserve unsent own activities when discard is cancelled',async()=>{
   const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle()});await flush();h.click('own-report');h.input();h.confirm(false);h.click('help');await flush();assert.match(h.element('#modal').innerHTML,/Enviar atividades/);assert.doesNotMatch(h.element('#modal').innerHTML,/Como usar meu cartão/);
+});
+
+test('a continuing pioneer opens the current diary while preserving the group reference month',async()=>{
+  const data=pioneerFixture(),reference=data.activeMonth,reads=[];
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async month=>{reads.push(month);return hoursBundle(month);}});await flush();
+  assert.equal(h.window.EmDiaApp.getUI().month,testToday().slice(0,7));assert.equal(h.window.EmDiaApp.getState().activeMonth,reference);
+  assert.match(h.element('#app').innerHTML,/Diário de horas|0h00|0 dias lançados/);assert.deepEqual(reads,[testToday().slice(0,7)]);
+  await h.change('active-month',reference);await flush();h.focus();await flush();assert.equal(h.window.EmDiaApp.getUI().month,reference);assert.equal(h.saveCalls(),0);
+});
+
+test('the diary follows auxiliary periods and ordinary publishers never request it',async()=>{
+  const data=pioneerFixture('auxiliary'),month=data.activeMonth;data.people[0].roles[0].end=month;let reads=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>{reads++;return hoursBundle(requested,{}, {kind:'auxiliary'});}});await flush();
+  assert.equal(h.window.EmDiaApp.getUI().month,month);assert.match(h.element('#app').innerHTML,/Diário de horas/);
+  await h.change('active-month',testToday().slice(0,7));await flush();assert.equal(reads,1);assert.doesNotMatch(h.element('#app').innerHTML,/Diário de horas/);
+  h.click('own-hours-edit');await flush();assert.equal(h.element('#modal').open,false);
+  let ordinaryReads=0;const ordinary=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle(),readOwnHours:async()=>{ordinaryReads++;}});await flush();assert.equal(ordinaryReads,0);
+});
+
+test('received pioneer history controls diary eligibility even after the roster period ended',async()=>{
+  const data=fixture(),month=C.addMonth(data.activeMonth,-1);data.activeMonth=month;data.people[0].startMonth=month;data.reports[month]={p_fixture:report({kind:'auxiliary',hours:15})};let reads=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>{reads++;return hoursBundle(requested,{}, {kind:'auxiliary'});}});await flush();
+  assert.equal(reads,1);assert.match(h.element('#app').innerHTML,/Diário de horas/);assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,15);
+});
+
+test('saving a day waits for cloud confirmation and never changes the received monthly hours',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday(),pending=deferred();let payload,calls=0;
+  data.reports[month]={p_fixture:report({kind:'regular',hours:55,studies:4})};
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),saveOwnHours:value=>{payload=C.clone(value);calls++;return pending.promise;}});await flush();
+  assert.match(h.element('#app').innerHTML,/0h00/);h.click('own-hours-edit');h.input();const saving=h.submit('modal-form',{date,dayHours:'1',dayMinutes:'30'});
+  assert.deepEqual(payload,{date,minutes:90,expectedVersion:0});assert.equal(calls,1);assert.match(h.element('#app').innerHTML,/0h00/);assert.equal(h.element('#modal').open,true);
+  pending.resolve(hoursBundle(month,{[date]:90}));await saving;await flush();assert.match(h.element('#app').innerHTML,/1h30|1 dia lançado/);
+  assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,55);assert.equal(h.window.EmDiaApp.getCloudStatus().revision,7);assert.equal(h.saveCalls(),0);assert.equal(h.element('#modal').open,false);
+});
+
+test('day validation keeps blanks unknown, accepts explicit zero, and rejects invalid dates or durations',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7);let calls=0,payload;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),saveOwnHours:async value=>{calls++;payload=C.clone(value);return hoursBundle(month,{[value.date]:value.minutes});}});await flush();h.click('own-hours-edit');
+  for(const fields of [{date:testToday(),dayHours:'',dayMinutes:''},{date:month+'-32',dayHours:'1'},{date:C.addMonth(month,1)+'-01',dayHours:'1'},{date:testToday(),dayHours:'24',dayMinutes:'1'},{date:testToday(),dayHours:'1.5'},{date:testToday(),dayHours:'-1'},{date:testToday(),dayHours:'1',dayMinutes:'60'}]){await h.submit('modal-form',fields);assert.equal(calls,0);}
+  await h.submit('modal-form',{date:testToday(),dayHours:'',dayMinutes:'0'});await flush();assert.equal(calls,1);assert.equal(payload.minutes,0);assert.match(h.element('#app').innerHTML,/0h00|1 dia lançado/);
+});
+
+test('a new day confirms replacement of a saved total rather than adding a second session silently',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday();let calls=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>hoursBundle(month,{[date]:90},{version:3}),saveOwnHours:async value=>{calls++;return hoursBundle(month,{[date]:value.minutes},{version:4});}});await flush();h.click('own-hours-edit');h.confirm(false);
+  await h.submit('modal-form',{date,dayHours:'2'});assert.equal(calls,0);assert.equal(h.element('#modal').open,true);h.confirm(true);await h.submit('modal-form',{date,dayHours:'2'});await flush();assert.equal(calls,1);assert.match(h.element('#app').innerHTML,/2h00/);
+});
+
+test('editing and removing one day use the diary version without changing approved records',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth,date=month+'-01',other=month+'-02',payloads=[];let entries={[date]:60,[other]:30},version=4;
+  data.reports[month]={p_fixture:report({kind:'regular',hours:55})};
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>hoursBundle(requested,requested===month?entries:{},{version:requested===month?version:0}),saveOwnHours:async value=>{payloads.push(C.clone(value));if(value.minutes===null)delete entries[value.date];else entries[value.date]=value.minutes;return hoursBundle(month,entries,{version:++version});}});await flush();await h.change('active-month',month);await flush();
+  h.click('own-hours-edit',date);assert.match(h.element('#modal').innerHTML,/value="1"|readonly/);await h.submit('modal-form',{date:other,dayHours:'2',dayMinutes:'15'});await flush();
+  assert.deepEqual(payloads[0],{date,minutes:135,expectedVersion:4});h.click('own-hours-edit',date);await h.submit('modal-form',{},'remove');await flush();assert.deepEqual(payloads[1],{date,minutes:null,expectedVersion:5});
+  assert.match(h.element('#app').innerHTML,/0h30|1 dia lançado/);assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,55);assert.equal(h.saveCalls(),0);
+});
+
+test('current pioneer months keep drafts available but refuse both final submission paths',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7);let submits=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>hoursBundle(month,{[testToday()]:60}),submitOwnHours:async()=>{submits++;},submitOwnReport:async()=>{submits++;}});await flush();
+  assert.match(h.element('#app').innerHTML,/data-action="own-hours-submit" disabled/);h.click('own-hours-submit');await flush();assert.equal(h.element('#modal').open,false);
+  h.click('own-report');await flush();assert.equal(h.element('#modal').open,false);assert.equal(submits,0);h.click('own-hours-edit');assert.equal(h.element('#modal').open,true);
+});
+
+test('an empty closed diary cannot turn an unknown monthly total into zero',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth;let submits=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),submitOwnHours:async()=>{submits++;}});await flush();await h.change('active-month',month);await flush();h.click('own-hours-submit');await flush();
+  assert.equal(h.element('#modal').open,false);assert.equal(submits,0);assert.match(h.element('#app').innerHTML,/data-action="own-hours-submit" disabled/);
+});
+
+test('closed diary submission sends versions and monthly studies without accepting a client total',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth,entries={[month+'-01']:90,[month+'-02']:45};let payload;
+  data.reports[month]={p_fixture:report({kind:'regular',hours:55,studies:4})};const revisions=[{id:'own_pending',month,status:'pending',version:4,report:activity({kind:'regular',hours:60,studies:6})}];
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data,revisions}),readOwnHours:async requested=>hoursBundle(requested,requested===month?entries:{},{version:requested===month?7:0}),submitOwnHours:async value=>{payload=C.clone(value);return{status:'pending',version:5,hoursVersion:7,totalMinutes:135};}});await flush();await h.change('active-month',month);await flush();h.click('own-hours-submit');
+  assert.match(h.element('#modal').innerHTML,/2h15|2,25|Participação: Sim/);assert.doesNotMatch(h.element('#modal').innerHTML,/name="hours"|name="participated"/);
+  await h.submit('modal-form',{participated:'no',studies:'7',hours:'999',totalMinutes:'99999',kind:'publisher'});await flush();
+  assert.deepEqual(payload,{month,participated:true,studies:7,expectedHoursVersion:7,expectedReportVersion:4});assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,55);assert.match(h.element('#app').innerHTML,/2h15/);assert.equal(h.saveCalls(),0);
+});
+
+test('a first diary submission does not mark the monthly card received before confirmation',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth,pending=deferred();let calls=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>hoursBundle(requested,requested===month?{[month+'-01']:60}:{}),submitOwnHours:()=>{calls++;return pending.promise;}});await flush();await h.change('active-month',month);await flush();h.click('own-hours-submit');const submitted=h.submit('modal-form',{studies:'2'});
+  assert.equal(C.getReport(h.window.EmDiaApp.getState(),'p_fixture',month),null);assert.equal(calls,1);data.reports[month]={p_fixture:report({kind:'regular',hours:1,studies:2})};pending.resolve({status:'accepted',version:1,hoursVersion:1,totalMinutes:60});await submitted;await flush();
+  assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,1);assert.equal(h.element('#modal').open,false);
+});
+
+test('a deliberately zero diary preserves unknown participation and studies',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth;let payload;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>hoursBundle(requested,requested===month?{[month+'-01']:0}:{}),submitOwnHours:async value=>{payload=C.clone(value);return{status:'accepted',version:1,hoursVersion:1,totalMinutes:0};}});await flush();await h.change('active-month',month);await flush();h.click('own-hours-submit');
+  assert.match(h.element('#modal').innerHTML,/name="participated"/);await h.submit('modal-form',{participated:'unknown',studies:''});await flush();assert.equal(payload.participated,null);assert.equal(payload.studies,null);assert.equal(payload.expectedHoursVersion,1);
+});
+
+test('a failed day save preserves the form, blocks duplicate attempts and reloads only after draft confirmation',async()=>{
+  const data=pioneerFixture();let calls=0,reads=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async month=>{reads++;return hoursBundle(month);},saveOwnHours:async()=>{calls++;throw new errors.ConflictError();}});await flush();h.click('own-hours-edit');h.input();h.element('#hours-duration').value='2';await h.submit('modal-form',{date:testToday(),dayHours:'2'});await flush();
+  assert.equal(h.element('#modal').open,true);assert.equal(h.element('#hours-duration').value,'2');assert.match(h.element('#form-error').textContent,/Preserve o que digitou/);assert.equal(h.saveCalls(),0);
+  await h.submit('modal-form',{date:testToday(),dayHours:'2'});assert.equal(calls,1);h.confirm(false);h.click('own-hours-refresh');await flush();assert.equal(reads,1);assert.equal(h.element('#modal').open,true);
+  h.confirm(true);h.click('own-hours-refresh');await flush();assert.equal(reads,2);assert.equal(h.element('#modal').open,false);
+});
+
+test('failed monthly diary submission retains the saved diary and protects the unsent form',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth;let calls=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>hoursBundle(requested,requested===month?{[month+'-01']:90}:{}),submitOwnHours:async()=>{calls++;throw new errors.ConflictError();}});await flush();await h.change('active-month',month);await flush();h.click('own-hours-submit');h.input();await h.submit('modal-form',{studies:'2'});await flush();
+  assert.equal(h.element('#modal').open,true);assert.equal(h.window.EmDiaApp.getCloudStatus().blocked,true);assert.match(h.element('#app').innerHTML,/1h30/);assert.equal(C.getReport(h.window.EmDiaApp.getState(),'p_fixture',month),null);
+  await h.submit('modal-form',{studies:'2'});assert.equal(calls,1);assert.equal(h.saveCalls(),0);
+});
+
+test('diary drafts are preserved when month, help or another day discard is cancelled',async()=>{
+  const data=pioneerFixture(),h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data})});await flush();const month=h.window.EmDiaApp.getUI().month;
+  h.click('own-hours-edit');h.input();h.confirm(false);h.click('prev-month');h.click('help');h.click('own-hours-edit');h.click('tab','reports');await flush();
+  assert.equal(h.window.EmDiaApp.getUI().month,month);assert.equal(h.window.EmDiaApp.getUI().tab,'my-card');assert.match(h.element('#modal').innerHTML,/Lançar horas do dia/);assert.equal(h.element('#modal').open,true);
+});
+
+test('a late diary read cannot replace the selected month or reopen data after sign-out',async()=>{
+  const data=pioneerFixture(),current=testToday().slice(0,7),previous=data.activeMonth,pending=deferred();
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:month=>month===current?pending.promise:Promise.resolve(hoursBundle(month,{[month+'-01']:120}))});await flush();await h.change('active-month',previous);await flush();pending.resolve(hoursBundle(current,{[testToday()]:180}));await flush();
+  assert.equal(h.window.EmDiaApp.getUI().month,previous);assert.match(h.element('#app').innerHTML,/2h00/);assert.doesNotMatch(h.element('#app').innerHTML,/3h00/);
+  const waiting=deferred(),out=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:()=>waiting.promise});await flush();out.auth('SIGNED_OUT',null);waiting.resolve(hoursBundle(current,{[testToday()]:777}));await flush();assert.equal(out.window.EmDiaApp.getState(),null);assert.doesNotMatch(out.element('#app').innerHTML,/Diário de horas|12h57/);
+});
+
+test('diary responses with a foreign binding or changed pioneer condition fail before rendering entries',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday();
+  for(const changes of [{groupId:'group_foreign'},{personId:'p_foreign'},{month:C.addMonth(month,-1)},{kind:'auxiliary'},{totalMinutes:1},{entries:{[month+'-32']:777},totalMinutes:777}]){
+    const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>hoursBundle(month,{[date]:777},changes)});await flush();
+    assert.doesNotMatch(h.element('#app').innerHTML,/12h57/);assert.match(h.element('#app').innerHTML,/Não foi possível carregar o diário/);h.click('own-hours-edit');await flush();assert.equal(h.element('#modal').open,false);
+  }
+});
+
+test('a diary save response cannot restore a previous publisher binding after sign-out',async()=>{
+  const data=pioneerFixture(),pending=deferred(),h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),saveOwnHours:()=>pending.promise});await flush();h.click('own-hours-edit');const submitted=h.submit('modal-form',{date:testToday(),dayHours:'2'});
+  h.auth('SIGNED_OUT',null);pending.resolve(hoursBundle(testToday().slice(0,7),{[testToday()]:120}));await submitted;await flush();assert.equal(h.window.EmDiaApp.getState(),null);assert.equal(h.element('#modal').innerHTML,'');assert.doesNotMatch(h.element('#app').innerHTML,/Diário de horas|2h00/);
+});
+
+test('a replaced publisher binding clears the previous diary before its delayed response arrives',async()=>{
+  const data=pioneerFixture(),pending=deferred(),month=testToday().slice(0,7);let personId='p_fixture';
+  const h=harness({profile:async()=>publisherProfile(personId),readOwnCard:async()=>{const own=C.clone(data);own.people[0].id=personId;return ownBundle({state:own,personId});},readOwnHours:()=>personId==='p_fixture'?pending.promise:Promise.resolve(hoursBundle(month,{[testToday()]:30},{personId}))});await flush();
+  personId='p_next';h.focus();await flush();assert.equal(h.window.EmDiaApp.getState().people[0].id,'p_next');assert.match(h.element('#app').innerHTML,/0h30/);
+  pending.resolve(hoursBundle(month,{[testToday()]:120}));await flush();assert.match(h.element('#app').innerHTML,/0h30/);assert.doesNotMatch(h.element('#app').innerHTML,/2h00/);
+});
+
+test('a late final diary submission cannot reopen the card or diary after sign-out',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth,pending=deferred();let reads=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>{reads++;return hoursBundle(requested,requested===month?{[month+'-01']:60}:{});},submitOwnHours:()=>pending.promise});await flush();await h.change('active-month',month);await flush();h.click('own-hours-submit');const submitted=h.submit('modal-form',{studies:'1'}),before=reads;
+  h.auth('SIGNED_OUT',null);pending.resolve({status:'accepted',version:1,hoursVersion:1,totalMinutes:60});await submitted;await flush();assert.equal(h.window.EmDiaApp.getState(),null);assert.equal(reads,before);assert.equal(h.element('#modal').innerHTML,'');assert.doesNotMatch(h.element('#app').innerHTML,/Diário de horas|Pessoa de Teste/);
 });

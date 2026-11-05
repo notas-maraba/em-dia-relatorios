@@ -510,3 +510,195 @@ test('alteração administrativa preserva papel quando omitido e não cria publi
   await assert.rejects(Cloud.create({client: invalid.client}).createUser({email: 'novo@example.test', password: 'Senha fictícia longa', groupId: group.id, role: 'publisher'}), error => error.code === 'invalid_role');
   assert.equal(invalid.calls.length, 0);
 });
+
+const hoursRow = (changes = {}) => ({group_id: group.id, person_id: 'p1', month: '2026-10', kind: 'regular',
+  entries: {'2026-10-01': 90, '2026-10-02': 0}, version: 2, total_minutes: 90, closed: true,
+  today: '2026-11-05', updated_at: null, ...changes});
+const hoursSubmitRow = (changes = {}) => ({status: 'accepted', version: 1, group_id: group.id, person_id: 'p1',
+  month: '2026-10', revision: 5, unchanged: false, hours_version: 2, total_minutes: 90, ...changes});
+
+test('diário próprio usa somente RPC e descarta metadados extras sem compartilhar referências', async () => {
+  const diary = hoursRow({private_note: 'Do not return', user_id: 'Do not return'});
+  const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_hours: {data: diary, error: null}}});
+  const result = await Cloud.create({client: m.client}).readOwnHours('2026-10');
+  assert.deepEqual(result, {groupId: group.id, personId: 'p1', month: '2026-10', kind: 'regular',
+    entries: {'2026-10-01': 90, '2026-10-02': 0}, version: 2, totalMinutes: 90, closed: true, today: '2026-11-05', updatedAt: null});
+  result.entries['2026-10-01'] = 500;
+  assert.equal(diary.entries['2026-10-01'], 90);
+  assert(!JSON.stringify(result).includes('Do not return'));
+  assert(!m.calls.some(call => call.table));
+  assert.deepEqual(operationCalls(m.calls), [['rpc', 'read_em_dia_own_hours', {p_month: '2026-10'}]]);
+});
+
+test('diário vazio preserva versão zero e tipo sem pioneiro não cria lançamentos', async () => {
+  const diary = hoursRow({kind: 'publisher', entries: {}, version: 0, total_minutes: 0});
+  const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_hours: {data: diary, error: null}}});
+  const result = await Cloud.create({client: m.client}).readOwnHours('2026-10');
+  assert.equal(result.kind, 'publisher'); assert.equal(result.version, 0); assert.deepEqual(result.entries, {});
+  assert.equal(operationCalls(m.calls).length, 1);
+});
+
+test('somente publicador verificado chama o diário mesmo com metadados de perfil forjados', async () => {
+  for (const role of ['admin', 'superintendent']) {
+    const m = mock({role}), api = Cloud.create({client: m.client});
+    await assert.rejects(api.readOwnHours('2026-10'), Cloud.AccessDeniedError);
+    await assert.rejects(api.saveOwnHours({date: '2026-10-01', minutes: 90, expectedVersion: 0}), Cloud.AccessDeniedError);
+    await assert.rejects(api.submitOwnHours({month: '2026-10', participated: true, studies: 0, expectedHoursVersion: 2, expectedReportVersion: 0}), Cloud.AccessDeniedError);
+    assert.equal(operationCalls(m.calls).length, 0);
+    assert(!m.calls.some(call => call.table));
+  }
+  const m = mock({noSession: true});
+  await assert.rejects(Cloud.create({client: m.client}).readOwnHours('2026-10'), Cloud.AuthRequiredError);
+  assert.equal(operationCalls(m.calls).length, 0);
+});
+
+test('diário rejeita identidade ou mês de outra consulta antes de devolver dados', async () => {
+  for (const changes of [{group_id: otherGroupId}, {person_id: 'p2'}, {month: '2026-09'}, {kind: 'admin'}]) {
+    const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_hours: {data: hoursRow(changes), error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).readOwnHours('2026-10'), error => error.code === 'invalid_response');
+  }
+});
+
+test('datas impossíveis, fora do mês ou futuras e valores de minutos inválidos não entram no diário lido', async () => {
+  const cases = [
+    {entries: {'2026-10-32': 90}}, {entries: {'2026-09-30': 90}}, {entries: {'2026-10-01': 1441}},
+    {entries: {'2026-10-01': -1}}, {entries: {'2026-10-01': 1.5}}, {entries: {'2026-10-01': '90'}},
+    {entries: {'2026-10-01': null}}, {entries: []}, {entries: {'2026-10-01': 90}, total_minutes: 91},
+    {month: '2026-11', entries: {'2026-11-06': 90}, closed: false},
+    {month: '2026-02', entries: {'2026-02-29': 90}}
+  ];
+  for (const changes of cases) {
+    const month = changes.month || '2026-10';
+    const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_hours: {data: hoursRow(changes), error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).readOwnHours(month), error => error.code === 'invalid_response');
+  }
+});
+
+test('diário valida soma, versão e fechamento usando a data de referência devolvida pelo servidor', async () => {
+  for (const changes of [{version: null}, {version: false}, {version: -1}, {version: Number.MAX_SAFE_INTEGER},
+    {version: 0}, {version: '2e0'}, {total_minutes: null}, {total_minutes: '90'}, {closed: false},
+    {today: '2026-11-31'}, {today: '2026-09-30'}, {updated_at: {private: true}}]) {
+    const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_hours: {data: hoursRow(changes), error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).readOwnHours('2026-10'), error => error.code === 'invalid_response');
+  }
+  const row = hoursRow({month: '2024-02', entries: {'2024-02-29': 1440}, version: '3', total_minutes: 1440});
+  const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_hours: {data: row, error: null}}});
+  assert.equal((await Cloud.create({client: m.client}).readOwnHours('2024-02')).version, 3);
+});
+
+test('salvar dia leva só data, minutos e versão esperada sem identidade ou total calculado pelo cliente', async () => {
+  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hours: {data: hoursRow({version: 3, unchanged: false}), error: null}}});
+  const result = await Cloud.create({client: m.client}).saveOwnHours({date: '2026-10-01', minutes: 90, expectedVersion: 2,
+    groupId: otherGroupId, personId: 'p2', kind: 'publisher', totalMinutes: 999});
+  assert.equal(result.version, 3); assert.equal(result.totalMinutes, 90); assert.equal(result.unchanged, false);
+  assert.deepEqual(operationCalls(m.calls), [['rpc', 'save_em_dia_own_hours', {p_date: '2026-10-01', p_minutes: 90, p_expected_version: 2}]]);
+  assert(!m.calls.some(call => call.table));
+});
+
+test('zero é lançamento explícito e null remove somente o dia solicitado', async () => {
+  const zero = mock({role: 'publisher', rpcResults: {save_em_dia_own_hours: {data: hoursRow({version: 3, unchanged: false}), error: null}}});
+  const saved = await Cloud.create({client: zero.client}).saveOwnHours({date: '2026-10-02', minutes: 0, expectedVersion: 2});
+  assert.equal(saved.entries['2026-10-02'], 0);
+  const removing = mock({role: 'publisher', rpcResults: {save_em_dia_own_hours: {data: hoursRow({entries: {'2026-10-01': 90}, version: 3, unchanged: false}), error: null}}});
+  const removed = await Cloud.create({client: removing.client}).saveOwnHours({date: '2026-10-02', minutes: null, expectedVersion: 2});
+  assert(!Object.hasOwn(removed.entries, '2026-10-02')); assert.equal(removed.entries['2026-10-01'], 90);
+  assert.equal(operationCalls(removing.calls)[0][2].p_minutes, null);
+});
+
+test('validação de data real, minutos inteiros e versão ocorre antes de chamar o SDK', async () => {
+  const m = mock({role: 'publisher'}), api = Cloud.create({client: m.client});
+  for (const date of ['2026-02-29', '2026-04-31', '2026-10-00', '2026-10-32', '2026-1-01', '2200-01-01', null]) {
+    await assert.rejects(api.saveOwnHours({date, minutes: 0, expectedVersion: 0}), error => error.code === 'invalid_date');
+  }
+  for (const minutes of [-1, 1441, 0.5, NaN, Infinity, '60', undefined, true]) {
+    await assert.rejects(api.saveOwnHours({date: '2026-10-01', minutes, expectedVersion: 0}), error => error.code === 'invalid_minutes');
+  }
+  for (const version of [-1, '0', Number.MAX_SAFE_INTEGER, 1.5, null]) {
+    await assert.rejects(api.saveOwnHours({date: '2026-10-01', minutes: 0, expectedVersion: version}), error => error.code === 'invalid_revision');
+  }
+  await assert.rejects(api.readOwnHours('2026-13'), error => error.code === 'invalid_month');
+  assert.equal(m.calls.length, 0);
+});
+
+test('repetição idêntica de lançamento aceita a versão já salva sem enviar duas gravações', async () => {
+  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hours: {data: hoursRow({version: 3, unchanged: true}), error: null}}});
+  const result = await Cloud.create({client: m.client}).saveOwnHours({date: '2026-10-01', minutes: 90, expectedVersion: 2});
+  assert.equal(result.version, 3); assert(result.unchanged); assert.equal(operationCalls(m.calls).length, 1);
+  const empty = mock({role: 'publisher', rpcResults: {save_em_dia_own_hours: {data: hoursRow({entries: {}, version: 0, total_minutes: 0, unchanged: true}), error: null}}});
+  assert.equal((await Cloud.create({client: empty.client}).saveOwnHours({date: '2026-10-01', minutes: null, expectedVersion: 0})).version, 0);
+});
+
+test('confirmação diária incoerente ou sem alteração solicitada falha em vez de anunciar sucesso', async () => {
+  for (const changes of [{unchanged: undefined}, {version: 4}, {kind: 'publisher'},
+    {entries: {'2026-10-01': 80}, total_minutes: 80}, {version: 1, unchanged: true}]) {
+    const data = hoursRow({version: 3, unchanged: false, ...changes});
+    const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_hours: {data, error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).saveOwnHours({date: '2026-10-01', minutes: 90, expectedVersion: 2}), error => error.code === 'invalid_response');
+  }
+});
+
+test('falha de rede, conflito e rejeição de dia futuro nunca repetem gravação automaticamente', async () => {
+  for (const options of [{rpcThrow: Error('lost response')}, {rpcResults: {save_em_dia_own_hours: {data: null, error: {code: '40001'}}}},
+    {rpcResults: {save_em_dia_own_hours: {data: null, error: {code: '22023'}}}}]) {
+    const m = mock({role: 'publisher', ...options});
+    await assert.rejects(Cloud.create({client: m.client}).saveOwnHours({date: '2026-11-06', minutes: 90, expectedVersion: 2}), Cloud.CloudError);
+    assert.equal(operationCalls(m.calls).length, 1); assert(!m.calls.some(call => call.table));
+  }
+});
+
+test('envio do diário usa as duas versões e somente participação e estudos sem receber horas do cliente', async () => {
+  const m = mock({role: 'publisher', rpcResults: {submit_em_dia_own_hours: {data: hoursSubmitRow({private_note: 'Do not return'}), error: null}}});
+  const result = await Cloud.create({client: m.client}).submitOwnHours({month: '2026-10', participated: true, studies: 0,
+    expectedHoursVersion: 2, expectedReportVersion: 0, hours: 99, totalMinutes: 999, groupId: otherGroupId, personId: 'p2'});
+  assert.deepEqual(result, {status: 'accepted', version: 1, groupId: group.id, personId: 'p1', month: '2026-10', revision: 5,
+    unchanged: false, hoursVersion: 2, totalMinutes: 90});
+  assert.deepEqual(operationCalls(m.calls), [['rpc', 'submit_em_dia_own_hours', {p_month: '2026-10', p_participated: true,
+    p_studies: 0, p_expected_hours_version: 2, p_expected_report_version: 0}]]);
+  assert(!JSON.stringify(result).includes('Do not return')); assert(!m.calls.some(call => call.table));
+});
+
+test('reenvio calculado permanece pendente e preserva participação e estudos desconhecidos', async () => {
+  const m = mock({role: 'publisher', rpcResults: {submit_em_dia_own_hours: {data: hoursSubmitRow({status: 'pending', version: 4, unchanged: false}), error: null}}});
+  const result = await Cloud.create({client: m.client}).submitOwnHours({month: '2026-10', participated: null, studies: null,
+    expectedHoursVersion: 2, expectedReportVersion: 3});
+  assert.equal(result.status, 'pending'); assert.equal(result.version, 4);
+  assert.equal(operationCalls(m.calls)[0][2].p_participated, null); assert.equal(operationCalls(m.calls)[0][2].p_studies, null);
+});
+
+test('envio calculado idêntico ao legado pode confirmar versão zero sem forjar um novo recebido', async () => {
+  const m = mock({role: 'publisher', rpcResults: {submit_em_dia_own_hours: {data: hoursSubmitRow({version: 0, unchanged: true}), error: null}}});
+  const result = await Cloud.create({client: m.client}).submitOwnHours({month: '2026-10', participated: true, studies: 2,
+    expectedHoursVersion: 2, expectedReportVersion: 0});
+  assert.equal(result.version, 0); assert(result.unchanged);
+});
+
+test('envio do diário rejeita participação, estudos e versões inválidas antes da rede', async () => {
+  const m = mock({role: 'publisher'}), api = Cloud.create({client: m.client});
+  const args = {month: '2026-10', participated: true, studies: 1, expectedHoursVersion: 2, expectedReportVersion: 0};
+  for (const changes of [{participated: 'true'}, {participated: undefined}, {studies: -1}, {studies: 0.5}, {studies: 10000}, {studies: '1'}]) {
+    await assert.rejects(api.submitOwnHours({...args, ...changes}), error => error.code === 'invalid_report');
+  }
+  for (const changes of [{expectedHoursVersion: 0}, {expectedHoursVersion: '2'}, {expectedReportVersion: null}, {expectedReportVersion: Number.MAX_SAFE_INTEGER}]) {
+    await assert.rejects(api.submitOwnHours({...args, ...changes}), error => error.code === 'invalid_revision');
+  }
+  assert.equal(m.calls.length, 0);
+});
+
+test('confirmação de envio não pode trocar escopo, mês, soma ou versão de diário consultada', async () => {
+  for (const changes of [{group_id: otherGroupId}, {person_id: 'p2'}, {month: '2026-09'}, {hours_version: 3}, {hours_version: 0},
+    {version: null}, {version: 3}, {version: 0}, {version: 0, status: 'pending', unchanged: true},
+    {total_minutes: 44641}, {total_minutes: -1}, {total_minutes: '90'}, {status: 'ignored'}, {revision: null}]) {
+    const m = mock({role: 'publisher', rpcResults: {submit_em_dia_own_hours: {data: hoursSubmitRow(changes), error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).submitOwnHours({month: '2026-10', participated: true, studies: 1,
+      expectedHoursVersion: 2, expectedReportVersion: 0}), error => error.code === 'invalid_response');
+  }
+});
+
+test('envio recusado por mês aberto ou conflito de diário/relatório não faz repetição nem grava grupo', async () => {
+  for (const error of [{code: '22023'}, {code: '40001'}, {status: 401}]) {
+    const m = mock({role: 'publisher', rpcResults: {submit_em_dia_own_hours: {data: null, error}}});
+    await assert.rejects(Cloud.create({client: m.client}).submitOwnHours({month: '2026-11', participated: true, studies: 0,
+      expectedHoursVersion: 2, expectedReportVersion: 0}), Cloud.CloudError);
+    assert.equal(operationCalls(m.calls).length, 1); assert(!m.calls.some(call => call.table));
+  }
+});

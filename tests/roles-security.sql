@@ -28,8 +28,9 @@ declare
   v_publisher uuid:=gen_random_uuid(); v_new_user uuid:=gen_random_uuid(); v_outsider uuid:=gen_random_uuid();
   v_replacement uuid:=gen_random_uuid();
   v_group uuid:=gen_random_uuid(); v_other_group uuid:=gen_random_uuid(); v_empty_group uuid:=gen_random_uuid();
-  v_month text:=to_char(statement_timestamp() at time zone 'America/Sao_Paulo','YYYY-MM');
-  v_previous text:=to_char((statement_timestamp() at time zone 'America/Sao_Paulo')-interval '1 month','YYYY-MM');
+  -- Pioneer monthly submissions use completed months in the daily-hours release.
+  v_month text:=to_char((statement_timestamp() at time zone 'America/Sao_Paulo')-interval '1 month','YYYY-MM');
+  v_previous text:=to_char((statement_timestamp() at time zone 'America/Sao_Paulo')-interval '2 months','YYYY-MM');
   v_future text:=to_char((statement_timestamp() at time zone 'America/Sao_Paulo')+interval '1 month','YYYY-MM');
   v_state jsonb; v_person jsonb; v_other_person jsonb; v_result jsonb; v_pending jsonb; v_card jsonb;
   v_saved public.em_dia_states; v_row public.em_dia_groups; v_before public.em_dia_states;
