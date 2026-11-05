@@ -19,6 +19,26 @@ test('Meta configurada registra 50 horas mensais e 600 anuais sem alterar a vers
   assert.equal(C.REGULAR_PIONEER_TARGETS.annualHours,600);
   assert(Object.isFrozen(C.REGULAR_PIONEER_TARGETS));assert.equal(C.VERSION,1);
 });
+test('Limites do diário são independentes da meta e têm configuração imutável',()=>{
+  assert.deepEqual(C.DIARY_LIMITS,{maxMinutes:44640,maxNoteLength:1000});
+  assert(Object.isFrozen(C.DIARY_LIMITS));
+});
+test('Cronômetro usa tempo recebido mais intervalo local somente enquanto está rodando',()=>{
+  const timer={status:'running',elapsedMs:90000,receivedAt:1000};
+  assert.equal(C.timerElapsedMs(timer,62000),151000);assert.equal(C.timerElapsedMs(timer,500),90000);
+  assert.deepEqual(timer,{status:'running',elapsedMs:90000,receivedAt:1000});
+  for(const status of ['paused','stopped'])assert.equal(C.timerElapsedMs({...timer,status},62000),90000);
+  assert.equal(C.timerElapsedMs({...timer,status:'idle',elapsedMs:0},62000),0);
+});
+test('Cronômetro continua após intervalo longo sem limitar duração à meta ou ao lançamento',()=>{
+  assert.equal(C.timerElapsedMs({status:'running',elapsedMs:4000000000,receivedAt:1000},864001000),4864000000);
+});
+test('Cronômetro rejeita estados, tempos fracionados, negativos e overflow',()=>{
+  const timer={status:'running',elapsedMs:90000,receivedAt:1000};
+  for(const patch of [{status:'unknown'},{status:'idle'},{elapsedMs:-1},{elapsedMs:1.5},{elapsedMs:'1'},
+    {receivedAt:-1},{receivedAt:NaN},{elapsedMs:Number.MAX_SAFE_INTEGER}])assert.throws(()=>C.timerElapsedMs({...timer,...patch},2000),/cronômetro/);
+  for(const now of [undefined,-1,Infinity,1.5,'2000'])assert.throws(()=>C.timerElapsedMs(timer,now),/cronômetro/);
+});
 test('Meta mensal soma em minutos, informa falta exata e arredonda ritmo para cima',()=>{
   const g=C.regularMonthlyGoal(goalInput);
   assert.equal(g.recordedMinutes,320);assert.equal(g.remainingMinutes,2680);
@@ -73,10 +93,16 @@ test('Meta rejeita calendários inválidos, anos fora do suporte e meses futuros
     {month:'2032-05'},{month:null},{today:null}])assert.throws(()=>C.regularMonthlyGoal({...goalInput,...patch}),/meta mensal/);
   assert.equal(C.regularMonthlyGoal({...goalInput,month:'2000-02',today:'2000-02-29'}).daysRemaining,1);
 });
-test('Meta rejeita totais e contagens incoerentes ou fora da capacidade do calendário',()=>{
+test('Meta aceita horas acumuladas em um dia acima de 24 horas e preserva excedente mensal',()=>{
+  const g=C.regularMonthlyGoal({...goalInput,totalMinutes:3300,entryCount:1});
+  assert.equal(g.recordedMinutes,3300);assert.equal(g.excessMinutes,300);assert.equal(g.status,'achieved');
+  assert.equal(g.percentage,110);assert.equal(g.barPercentage,100);
+  assert.equal(C.regularMonthlyGoal({...goalInput,month:'2032-02',today:'2032-02-29',totalMinutes:44640,entryCount:1}).recordedMinutes,44640);
+});
+test('Meta rejeita totais incoerentes, acima de 744 horas e contagens fora do calendário',()=>{
   for(const patch of [{totalMinutes:-1},{totalMinutes:NaN},{totalMinutes:Infinity},{totalMinutes:1.5},
     {totalMinutes:'320'},{entryCount:0},{entryCount:-1},{entryCount:1.2},{entryCount:31},
-    {totalMinutes:1441,entryCount:1},{month:'2032-02',today:'2032-02-29',entryCount:30}]){
+    {totalMinutes:44641,entryCount:1},{month:'2032-02',today:'2032-02-29',entryCount:30}]){
     assert.throws(()=>C.regularMonthlyGoal({...goalInput,...patch}),/meta mensal/);
   }
 });

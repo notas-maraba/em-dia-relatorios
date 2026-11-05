@@ -16,7 +16,7 @@ function fixture() {
   return state;
 }
 function harness(overrides={},options={}) {
-  const elements = new Map(), docEvents = new Map(), winEvents = new Map(), downloads = [];
+  const elements = new Map(), docEvents = new Map(), winEvents = new Map(), downloads = [],intervals=new Map();let intervalId=0,clock=options.now??Date.now();
   function element(selector='') {
     if (elements.has(selector)) return elements.get(selector);
     const el={innerHTML:'',textContent:'',style:{},dataset:{},disabled:false,open:false,hidden:false,isConnected:true,value:'',
@@ -33,14 +33,16 @@ function harness(overrides={},options={}) {
     groups:async()=>defaultGroups,listRevisions:async()=>({revisions:[],total:0}),publisherAccounts:async()=>[],transferGroups:async()=>defaultGroups,createPublisherUser:async()=>({userId:'publisher_user'}),transferPublisher:async()=>({}),readOwnHours:async month=>hoursBundle(month),
     createGroup:async name=>({id:'group_c',name}),listUsers:async()=>({users:[]}),createUser:async()=>({ok:true}),assignUser:async()=>({ok:true}),read:async()=>({state:fixture(),revision:7,updatedAt:null}),
     save:async state=>({state,revision:8,updatedAt:null}),login:async()=>({sent:true}),loginPassword:async()=>({signedIn:true}),
-    logout:async()=>{},subscribeAuth(fn){authCallback=fn;return()=>{};},...overrides};
+    readOwnTimer:async()=>timerBundle(),logout:async()=>{},subscribeAuth(fn){authCallback=fn;return()=>{};},...overrides};
   const originalSave=cloud.save;cloud.save=(...args)=>{saveCalls++;return originalSave(...args);};
   const window={EmDiaCore:options.core||C,EMDIA_CLOUD_CONFIG:{url:'https://example.invalid',publishableKey:'test-public-key'},
     supabase:{createClient:()=>({})},EmDiaCloud:{...errors,create:()=>cloud},
     crypto:{randomUUID:()=>freshLaunchId(++launchCounter)},scrollTo(){},addEventListener(name,fn){winEvents.set(name,fn);}};
   const TestURL=class extends URL {static createObjectURL(blob){downloads.push(blob);return 'blob:fixture';}static revokeObjectURL(){}};
-  const context={window,document,console,URL:TestURL,Blob,Date,Number,String,Object,Array,Error,Promise,
+  const ClockDate=class extends Date {constructor(...args){super(...(args.length?args:[clock]));}static now(){return clock;}};
+  const context={window,document,console,URL:TestURL,Blob,Date:options.now===undefined?Date:ClockDate,Number,String,Object,Array,Error,Promise,
     navigator:{},confirm:()=>confirmResult,setTimeout:()=>1,
+    setInterval(fn){intervals.set(++intervalId,fn);return intervalId;},clearInterval(id){intervals.delete(id);},
     FormData:class {constructor(form){this.values=new Map(Object.entries(form.fields||{}));}get(k){return this.values.get(k)||null;}has(k){return this.values.has(k);}},
     localStorage:new Proxy({}, {get(){throw Error('Application attempted to access local records');}})};
   vm.runInNewContext(appCode,context,{filename:'assets/app.js'});
@@ -50,7 +52,9 @@ function harness(overrides={},options={}) {
   function input(form='#modal-form') {docEvents.get('input')({target:{id:'person-name',closest:s=>s===form}});}
   return {window,cloud,elements,element,click,submit,input,change,downloads,navigator:context.navigator,confirm(value){confirmResult=value;},saveCalls:()=>saveCalls,
     auth(event,session){currentSession=session;authCallback(event,session);},
-    focus(){winEvents.get('focus')();},visibility(){docEvents.get('visibilitychange')?.();}};
+    focus(){winEvents.get('focus')();},visibility(value='visible'){document.visibilityState=value;docEvents.get('visibilitychange')?.();},
+    advance(ms){clock+=ms;for(const tick of intervals.values())tick();},intervalCount:()=>intervals.size,
+    unload(){const event={preventDefault(){this.prevented=true;}};winEvents.get('beforeunload')?.(event);return event;}};
 }
 test('records remain hidden until session verification and cloud read both finish',async()=>{
   const verification=deferred(),read=deferred();let readCalls=0;
@@ -511,6 +515,8 @@ function ownBundle({state=fixture(),revisions=[],personId='p_fixture',groupId='g
 }
 function launchIdForDate(date){return '10000000-0000-4000-8000-'+date.replaceAll('-','').padStart(12,'0');}
 function freshLaunchId(index){return '20000000-0000-4000-8000-'+String(index).padStart(12,'0');}
+function timerBundle(changes={}){return {groupId:'group_a',personId:'p_fixture',timerId:null,status:'idle',version:0,startDate:null,startedAt:null,anchorAt:null,stoppedAt:null,accumulatedMs:0,elapsedMs:0,serverNow:new Date().toISOString(),...changes};}
+function activeTimer(status='running',changes={}){return timerBundle({timerId:freshLaunchId(501),status,version:1,startDate:testToday(),startedAt:new Date().toISOString(),anchorAt:status==='running'?new Date().toISOString():null,stoppedAt:status==='stopped'?new Date().toISOString():null,elapsedMs:65000,accumulatedMs:status==='running'?0:65000,...changes});}
 function hoursBundle(month,entries={},changes={}) {
   return {groupId:'group_a',personId:'p_fixture',month,kind:'regular',entries:{...entries},version:Object.keys(entries).length?1:0,
     totalMinutes:Object.values(entries).reduce((total,value)=>total+value,0),closed:month<testToday().slice(0,7),today:testToday(),updatedAt:null,
@@ -715,7 +721,7 @@ test('saving a day waits for cloud confirmation and never changes the received m
   data.reports[month]={p_fixture:report({kind:'regular',hours:55,studies:4})};
   const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),saveOwnHoursLaunch:value=>{payload=C.clone(value);calls++;return pending.promise;}});await flush();
   assert.match(h.element('#app').innerHTML,/0h00/);h.click('own-hours-edit');h.input();const saving=h.submit('modal-form',{date,dayHours:'1',dayMinutes:'30'});
-  assert.deepEqual(payload,{id:freshLaunchId(1),date,minutes:90,expectedVersion:0});assert.equal(calls,1);assert.match(h.element('#app').innerHTML,/0h00/);assert.equal(h.element('#modal').open,true);
+  assert.deepEqual(payload,{id:freshLaunchId(1),date,minutes:90,note:'',expectedVersion:0});assert.equal(calls,1);assert.match(h.element('#app').innerHTML,/0h00/);assert.equal(h.element('#modal').open,true);
   pending.resolve(launchBundle(month,[{id:payload.id,date,minutes:90}]));await saving;await flush();assert.match(h.element('#app').innerHTML,/1h30|1 dia lançado/);
   assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,55);assert.equal(h.window.EmDiaApp.getCloudStatus().revision,7);assert.equal(h.saveCalls(),0);assert.equal(h.element('#modal').open,false);
 });
@@ -723,7 +729,7 @@ test('saving a day waits for cloud confirmation and never changes the received m
 test('day validation keeps blanks unknown, accepts explicit zero, and rejects invalid dates or durations',async()=>{
   const data=pioneerFixture(),month=testToday().slice(0,7);let calls=0,payload;
   const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),saveOwnHoursLaunch:async value=>{calls++;payload=C.clone(value);return launchBundle(month,[{id:value.id,date:value.date,minutes:value.minutes}]);}});await flush();h.click('own-hours-edit');
-  for(const fields of [{date:testToday(),dayHours:'',dayMinutes:''},{date:month+'-32',dayHours:'1'},{date:C.addMonth(month,1)+'-01',dayHours:'1'},{date:testToday(),dayHours:'24',dayMinutes:'1'},{date:testToday(),dayHours:'1.5'},{date:testToday(),dayHours:'-1'},{date:testToday(),dayHours:'1',dayMinutes:'60'}]){await h.submit('modal-form',fields);assert.equal(calls,0);}
+  for(const fields of [{date:testToday(),dayHours:'',dayMinutes:''},{date:month+'-32',dayHours:'1'},{date:C.addMonth(month,1)+'-01',dayHours:'1'},{date:testToday(),dayHours:'744',dayMinutes:'1'},{date:testToday(),dayHours:'1.5'},{date:testToday(),dayHours:'-1'},{date:testToday(),dayHours:'1',dayMinutes:'60'}]){await h.submit('modal-form',fields);assert.equal(calls,0);}
   await h.submit('modal-form',{date:testToday(),dayHours:'',dayMinutes:'0'});await flush();assert.equal(calls,1);assert.equal(payload.minutes,0);assert.match(h.element('#app').innerHTML,/0h00|1 dia lançado/);
 });
 
@@ -734,7 +740,7 @@ test('a new launch on a saved date adds a second session without replacing the f
   await h.submit('modal-form',{date,dayHours:'2'});await flush();assert.equal(calls,1);assert.equal(h.element('#modal').open,false);
   assert.notEqual(payload.id,first.id);assert.equal(payload.expectedVersion,3);assert.match(h.element('#app').innerHTML,/3h30/);
   assert.match(h.element('#app').innerHTML,/2 lançamentos em 1 dia/);assert.match(h.element('#app').innerHTML,/Ver lançamentos \(2\)/);
-  assert.match(h.element('#app').innerHTML,/Total do dia: 3h30/);assert.ok(h.element('#app').innerHTML.includes('data-id="'+first.id+'"'));
+  assert.match(h.element('#app').innerHTML,/Total da data: 3h30/);assert.ok(h.element('#app').innerHTML.includes('data-id="'+first.id+'"'));
   assert.equal(h.saveCalls(),0);
 });
 
@@ -743,7 +749,7 @@ test('editing and removing one day use the diary version without changing approv
   data.reports[month]={p_fixture:report({kind:'regular',hours:55})};
   const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>hoursBundle(requested,requested===month?entries:{},{version:requested===month?version:0}),saveOwnHoursLaunch:async value=>{payloads.push(C.clone(value));if(value.minutes===null)delete entries[value.date];else entries[value.date]=value.minutes;return hoursBundle(month,entries,{version:++version});}});await flush();await h.change('active-month',month);await flush();
   h.click('own-hours-edit',launchIdForDate(date));assert.match(h.element('#modal').innerHTML,/value="1"|readonly/);await h.submit('modal-form',{date:other,dayHours:'2',dayMinutes:'15'});await flush();
-  assert.deepEqual(payloads[0],{id:launchIdForDate(date),date,minutes:135,expectedVersion:4});h.click('own-hours-edit',launchIdForDate(date));await h.submit('modal-form',{},'remove');await flush();assert.deepEqual(payloads[1],{id:launchIdForDate(date),date,minutes:null,expectedVersion:5});
+  assert.deepEqual(payloads[0],{id:launchIdForDate(date),date,minutes:135,note:'',expectedVersion:4});h.click('own-hours-edit',launchIdForDate(date));await h.submit('modal-form',{},'remove');await flush();assert.deepEqual(payloads[1],{id:launchIdForDate(date),date,minutes:null,note:null,expectedVersion:5});
   assert.match(h.element('#app').innerHTML,/0h30|1 dia lançado/);assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,55);assert.equal(h.saveCalls(),0);
 });
 
@@ -909,7 +915,7 @@ test('launch lists group sessions by day while the monthly goal counts distinct 
   const data=pioneerFixture(),month=data.activeMonth,first=month+'-01',second=month+'-02';
   const launches=[{id:freshLaunchId(21),date:first,minutes:50},{id:freshLaunchId(22),date:first,minutes:75},{id:freshLaunchId(23),date:second,minutes:60}];
   const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>launchBundle(requested,requested===month?launches:[])});await flush();await h.change('active-month',month);await flush();
-  const html=h.element('#app').innerHTML;assert.match(html,/3 lançamentos em 2 dias/);assert.match(html,/Total do dia: 2h05/);assert.match(html,/Total do dia: 1h00/);
+  const html=h.element('#app').innerHTML;assert.match(html,/3 lançamentos em 2 dias/);assert.match(html,/Total da data: 2h05/);assert.match(html,/Total da data: 1h00/);
   assert.equal((html.match(/class="hours-day"/g)||[]).length,2);assert.equal((html.match(/class="hours-launch-order"/g)||[]).length,3);
   assert.match(monthlyGoalMarkup(h),/3h05/);assert.equal(h.saveCalls(),0);
 });
@@ -921,7 +927,7 @@ test('editing one same-day session preserves every other launch and ignores a ch
     saveOwnHoursLaunch:async value=>{payload=C.clone(value);return launchBundle(month,[{...first,minutes:value.minutes},second],{version:7});}});await flush();await h.change('active-month',month);await flush();
   h.click('own-hours-edit',first.id);assert.match(h.element('#modal').innerHTML,/Editar lançamento|readonly|Remover lançamento/);
   await h.submit('modal-form',{date:other,dayHours:'2',dayMinutes:'15'});await flush();
-  assert.deepEqual(payload,{id:first.id,date,minutes:135,expectedVersion:6});assert.match(h.element('#app').innerHTML,/Total do dia: 3h00/);
+  assert.deepEqual(payload,{id:first.id,date,minutes:135,note:'',expectedVersion:6});assert.match(h.element('#app').innerHTML,/Total da data: 3h00/);
   assert.ok(h.element('#app').innerHTML.includes('data-id="'+second.id+'"'));assert.match(h.element('#app').innerHTML,/0h45/);assert.equal(h.saveCalls(),0);
 });
 
@@ -931,32 +937,33 @@ test('removing one launch keeps another session on that date and can be cancelle
   const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>launchBundle(requested,requested===month?[first,second]:[],{version:requested===month?3:0}),
     saveOwnHoursLaunch:async value=>{calls++;payload=C.clone(value);return launchBundle(month,[second],{version:4});}});await flush();await h.change('active-month',month);await flush();h.click('own-hours-edit',first.id);
   h.confirm(false);await h.submit('modal-form',{},'remove');assert.equal(calls,0);assert.equal(h.element('#modal').open,true);
-  h.confirm(true);await h.submit('modal-form',{},'remove');await flush();assert.deepEqual(payload,{id:first.id,date,minutes:null,expectedVersion:3});
-  assert.match(h.element('#app').innerHTML,/1 lançamento em 1 dia/);assert.match(h.element('#app').innerHTML,/Total do dia: 0h45/);assert.ok(!h.element('#app').innerHTML.includes('data-id="'+first.id+'"'));assert.equal(h.saveCalls(),0);
+  h.confirm(true);await h.submit('modal-form',{},'remove');await flush();assert.deepEqual(payload,{id:first.id,date,minutes:null,note:null,expectedVersion:3});
+  assert.match(h.element('#app').innerHTML,/1 lançamento em 1 dia/);assert.match(h.element('#app').innerHTML,/Total da data: 0h45/);assert.ok(!h.element('#app').innerHTML.includes('data-id="'+first.id+'"'));assert.equal(h.saveCalls(),0);
 });
 
 test('a saved zero session remains explicit beside another session on the same date',async()=>{
   const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday(),first={id:freshLaunchId(51),date,minutes:40};let payload;
   const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>launchBundle(month,[first]),
     saveOwnHoursLaunch:async value=>{payload=C.clone(value);return launchBundle(month,[first,{id:value.id,date,minutes:value.minutes}],{version:2});}});await flush();h.click('own-hours-edit');
-  await h.submit('modal-form',{date,dayHours:'',dayMinutes:'0'});await flush();assert.equal(payload.minutes,0);assert.match(h.element('#app').innerHTML,/2 lançamentos em 1 dia/);assert.match(h.element('#app').innerHTML,/Total do dia: 0h40/);
+  await h.submit('modal-form',{date,dayHours:'',dayMinutes:'0'});await flush();assert.equal(payload.minutes,0);assert.match(h.element('#app').innerHTML,/2 lançamentos em 1 dia/);assert.match(h.element('#app').innerHTML,/Total da data: 0h40/);
 });
 
-test('the sum of a day cannot exceed 24 hours but a monthly total above the target accepts another launch',async()=>{
+test('accumulated launches on one date can exceed 24 hours and the monthly target',async()=>{
   const data=pioneerFixture(),month=data.activeMonth,date=month+'-03';let calls=0;
-  const launches=[{id:freshLaunchId(61),date:month+'-01',minutes:1440},{id:freshLaunchId(62),date:month+'-02',minutes:1440},{id:freshLaunchId(63),date,minutes:120}];
-  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>launchBundle(requested,requested===month?launches:[],{version:requested===month?3:0}),
-    saveOwnHoursLaunch:async value=>{calls++;return launchBundle(month,[...launches,{id:value.id,date:value.date,minutes:value.minutes}],{version:4});}});await flush();await h.change('active-month',month);await flush();
-  assert.match(monthlyGoalMarkup(h),/Meta de horas atingida/);h.click('own-hours-edit');await h.submit('modal-form',{date:month+'-01',dayHours:'1'});assert.equal(calls,0);assert.match(h.element('#form-error').textContent,/mais de 24 horas/);
-  await h.submit('modal-form',{date,dayHours:'3'});await flush();assert.equal(calls,1);assert.match(monthlyGoalMarkup(h),/53h00|3h00 além da meta/);assert.match(h.element('#app').innerHTML,/Total do dia: 5h00/);assert.equal(h.saveCalls(),0);
+  const launches=[{id:freshLaunchId(61),date,minutes:1800},{id:freshLaunchId(62),date,minutes:1500}];
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>launchBundle(requested,requested===month?launches:[],{version:requested===month?2:0}),
+    saveOwnHoursLaunch:async value=>{calls++;return launchBundle(month,[...launches,{id:value.id,date:value.date,minutes:value.minutes,note:value.note}],{version:3});}});await flush();await h.change('active-month',month);await flush();
+  assert.match(monthlyGoalMarkup(h),/55h00|Meta de horas atingida/);h.click('own-hours-edit');assert.match(h.element('#modal').innerHTML,/max="744"|Data do lançamento/);
+  await h.submit('modal-form',{date,dayHours:'2'});await flush();assert.equal(calls,1);assert.match(monthlyGoalMarkup(h),/57h00|7h00 além da meta/);assert.match(h.element('#app').innerHTML,/Total da data: 57h00/);assert.equal(h.saveCalls(),0);
 });
 
-test('editing a launch subtracts its own minutes when checking the daily 24 hour limit',async()=>{
+test('editing subtracts its own minutes when checking the existing monthly limit',async()=>{
   const data=pioneerFixture(),month=data.activeMonth,date=month+'-01';let calls=0;
-  const first={id:freshLaunchId(71),date,minutes:840},second={id:freshLaunchId(72),date,minutes:600};
+  const first={id:freshLaunchId(71),date,minutes:44610},second={id:freshLaunchId(72),date,minutes:30};
   const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>launchBundle(requested,requested===month?[first,second]:[],{version:requested===month?2:0}),
-    saveOwnHoursLaunch:async value=>{calls++;return launchBundle(month,[{...first,minutes:value.minutes},second],{version:3});}});await flush();await h.change('active-month',month);await flush();h.click('own-hours-edit',first.id);
-  await h.submit('modal-form',{dayHours:'14',dayMinutes:'1'});assert.equal(calls,0);await h.submit('modal-form',{dayHours:'13',dayMinutes:'30'});await flush();assert.equal(calls,1);assert.match(h.element('#app').innerHTML,/Total do dia: 23h30/);
+    saveOwnHoursLaunch:async value=>{calls++;return launchBundle(month,[{...first,minutes:value.minutes,note:value.note},second],{version:3});}});await flush();await h.change('active-month',month);await flush();h.click('own-hours-edit',first.id);
+  await h.submit('modal-form',{dayHours:'744'});assert.equal(calls,0);assert.match(h.element('#form-error').textContent,/total do mês.*744/);
+  await h.submit('modal-form',{dayHours:'743',dayMinutes:'15'});await flush();assert.equal(calls,1);assert.match(h.element('#app').innerHTML,/Total da data: 743h45/);
 });
 
 test('duplicate, foreign-date or inconsistent launch arrays fail before any entries are displayed',async()=>{
@@ -968,7 +975,9 @@ test('duplicate, foreign-date or inconsistent launch arrays fail before any entr
     {launches:[{id:'not-a-uuid',date,minutes:10}]},
     {launches:[{id,date,minutes:11}]},
     {launches:[{id,date,minutes:-1}]},
-    {launches:[{id,date,minutes:1440},{id:freshLaunchId(82),date,minutes:1}],entries:{[date]:1441},totalMinutes:1441}
+    {launches:[{id,date,minutes:44640},{id:freshLaunchId(82),date,minutes:1}],entries:{[date]:44641},totalMinutes:44641},
+    {launches:[{id,date,minutes:10,note:'x'.repeat(1001)}]},
+    {launches:[{id,date,minutes:10,note:{private:'invalid'}}]}
   ];
   for(const changes of invalid){const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>hoursBundle(month,{[date]:10},changes)});await flush();
     assert.match(h.element('#app').innerHTML,/Não foi possível carregar o diário/);assert.doesNotMatch(h.element('#app').innerHTML,/data-id="20000000/);h.click('own-hours-edit');await flush();assert.equal(h.element('#modal').open,false);}
@@ -981,7 +990,7 @@ test('new launch identifiers stay fixed for a pending submit and are never reuse
   const save=h.submit('modal-form',{date,dayHours:'1'});await h.submit('modal-form',{date,dayHours:'1'});assert.equal(payloads.length,1);
   launches=[{id:payloads[0].id,date,minutes:60}];version=1;pending.resolve(launchBundle(month,launches,{version}));await save;await flush();
   h.cloud.saveOwnHoursLaunch=async value=>{payloads.push(C.clone(value));launches.push({id:value.id,date,minutes:value.minutes});return launchBundle(month,launches,{version:2});};h.click('own-hours-edit');await h.submit('modal-form',{date,dayMinutes:'20'});await flush();
-  assert.equal(payloads.length,2);assert.notEqual(payloads[0].id,payloads[1].id);assert.match(h.element('#app').innerHTML,/Total do dia: 1h20/);
+  assert.equal(payloads.length,2);assert.notEqual(payloads[0].id,payloads[1].id);assert.match(h.element('#app').innerHTML,/Total da data: 1h20/);
 });
 
 test('ambiguous save confirmations retain the draft and never display an unconfirmed session',async()=>{
@@ -993,4 +1002,203 @@ test('ambiguous save confirmations retain the draft and never display an unconfi
 test('an unavailable secure identifier generator never sends a new launch',async()=>{
   const data=pioneerFixture();let calls=0;
   const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),saveOwnHoursLaunch:async()=>{calls++;}});await flush();h.window.crypto={};h.click('own-hours-edit');await flush();assert.equal(h.element('#modal').open,false);assert.equal(calls,0);
+});
+
+test('new accumulated launches have an optional empty observation and accept more than 24 hours',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday();let payload;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),
+    saveOwnHoursLaunch:async value=>{payload=C.clone(value);return launchBundle(month,[{id:value.id,date,minutes:value.minutes,note:value.note}],{version:1});}});await flush();h.click('own-hours-edit');
+  const html=h.element('#modal').innerHTML;assert.match(html,/Data do lançamento/);assert.match(html,/acumuladas acima de 24 horas/);
+  assert.match(html,/<textarea id="hours-note" name="note" rows="2" maxlength="1000"><\/textarea>/);assert.match(html,/Observação \(opcional\)/);assert.doesNotMatch(html,/<textarea[^>]+required/);
+  await h.submit('modal-form',{date,dayHours:'30',dayMinutes:'15'});await flush();assert.equal(payload.minutes,1815);assert.equal(payload.note,'');assert.equal(h.element('#modal').open,false);
+  assert.match(h.element('#app').innerHTML,/Total da data: 30h15/);assert.doesNotMatch(h.element('#app').innerHTML,/class="hours-launch-note"/);assert.equal(h.saveCalls(),0);
+});
+
+test('private multiline observations are escaped in the own list and edit form',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday(),id=freshLaunchId(111),note='<img src=x onerror="fixture()">\nLinha privada & outra';
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>launchBundle(month,[{id,date,minutes:90,note}])});await flush();
+  const html=h.element('#app').innerHTML;assert.match(html,/class="hours-launch-note">&lt;img src=x onerror=&quot;fixture\(\)&quot;&gt;\nLinha privada &amp; outra<\/p>/);assert.doesNotMatch(html,/<img src=x/);
+  h.click('own-hours-edit',id);assert.match(h.element('#modal').innerHTML,/&lt;img src=x onerror=&quot;fixture\(\)&quot;&gt;\nLinha privada &amp; outra<\/textarea>/);assert.doesNotMatch(h.element('#modal').innerHTML,/<img src=x/);
+  assert.doesNotMatch(JSON.stringify(h.window.EmDiaApp.getState()),/Linha privada|fixture\(\)/);assert.equal(h.saveCalls(),0);
+});
+
+test('editing only an observation and clearing it preserve other launches, totals and approved hours',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday(),payloads=[];let version=4;
+  data.reports[month]={p_fixture:report({kind:'regular',hours:55,studies:4})};
+  let launches=[{id:freshLaunchId(121),date,minutes:90,note:'Anterior'},{id:freshLaunchId(122),date,minutes:30,note:'Outro lançamento'}];
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>launchBundle(month,launches,{version}),
+    saveOwnHoursLaunch:async value=>{payloads.push(C.clone(value));launches=launches.map(item=>item.id===value.id?{...item,minutes:value.minutes,note:value.note}:item);return launchBundle(month,launches,{version:++version});}});await flush();
+  h.click('own-hours-edit',launches[0].id);await h.submit('modal-form',{dayHours:'1',dayMinutes:'30',note:'  Nova observação\nsegunda linha  '});await flush();
+  assert.equal(payloads[0].note,'Nova observação\nsegunda linha');assert.equal(payloads[0].minutes,90);assert.equal(payloads[0].expectedVersion,4);assert.match(h.element('#app').innerHTML,/Total da data: 2h00/);
+  assert.match(h.element('#app').innerHTML,/Nova observação\nsegunda linha/);assert.match(h.element('#app').innerHTML,/Outro lançamento/);
+  h.click('own-hours-edit',launches[0].id);await h.submit('modal-form',{dayHours:'1',dayMinutes:'30',note:'   '});await flush();
+  assert.equal(payloads[1].note,'');assert.equal(payloads[1].expectedVersion,5);assert.doesNotMatch(h.element('#app').innerHTML,/Nova observação|Anterior/);assert.match(h.element('#app').innerHTML,/Outro lançamento/);
+  assert.match(h.element('#app').innerHTML,/Total da data: 2h00/);assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,55);assert.equal(h.saveCalls(),0);
+});
+
+test('removing a noted launch ignores unsent note fields and preserves a same-date observation',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday(),first={id:freshLaunchId(131),date,minutes:1800,note:'Remover este'},second={id:freshLaunchId(132),date,minutes:1500,note:'Preservar este'};let payload;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>launchBundle(month,[first,second],{version:3}),
+    saveOwnHoursLaunch:async value=>{payload=C.clone(value);return launchBundle(month,[second],{version:4});}});await flush();h.click('own-hours-edit',first.id);
+  await h.submit('modal-form',{dayHours:'-7',note:'x'.repeat(1001)},'remove');await flush();
+  assert.deepEqual(payload,{id:first.id,date,minutes:null,note:null,expectedVersion:3});assert.doesNotMatch(h.element('#app').innerHTML,/Remover este/);assert.match(h.element('#app').innerHTML,/Preservar este|Total da data: 25h00/);assert.equal(h.saveCalls(),0);
+});
+
+test('observation length is checked before saving and its maximum does not change hours',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday();let calls=0,payload;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),
+    saveOwnHoursLaunch:async value=>{calls++;payload=C.clone(value);return launchBundle(month,[{id:value.id,date,minutes:value.minutes,note:value.note}],{version:1});}});await flush();h.click('own-hours-edit');
+  await h.submit('modal-form',{date,dayHours:'1',note:'x'.repeat(1001)});assert.equal(calls,0);assert.match(h.element('#form-error').textContent,/até 1000 caracteres/);
+  await h.submit('modal-form',{date,dayHours:'1',note:'x'.repeat(1000)});await flush();assert.equal(calls,1);assert.equal(payload.note.length,1000);assert.equal(payload.minutes,60);assert.equal(h.element('#modal').open,false);
+});
+
+test('a failed observation save preserves its draft, blocks retry and respects cancelled discard',async()=>{
+  const data=pioneerFixture(),draft='Observação ainda não confirmada\nOutra linha';let calls=0,reads=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async month=>{reads++;return hoursBundle(month);},
+    saveOwnHoursLaunch:async()=>{calls++;throw new errors.CloudError('Connection lost');}});await flush();h.click('own-hours-edit');h.element('#hours-note').value=draft;h.input();
+  await h.submit('modal-form',{date:testToday(),dayHours:'1',note:draft});await flush();assert.equal(h.element('#modal').open,true);assert.equal(h.element('#hours-note').value,draft);assert.match(h.element('#form-error').textContent,/Preserve o que digitou/);
+  await h.submit('modal-form',{date:testToday(),dayHours:'1',note:draft});assert.equal(calls,1);h.confirm(false);h.click('own-hours-refresh');h.click('help');h.click('prev-month');await flush();
+  assert.equal(reads,1);assert.equal(h.element('#modal').open,true);assert.equal(h.element('#hours-note').value,draft);assert.doesNotMatch(h.element('#app').innerHTML,/Observação ainda não confirmada/);assert.equal(h.saveCalls(),0);
+});
+
+test('legacy launches without observations open with an empty optional field',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday(),id=freshLaunchId(141);
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>launchBundle(month,[{id,date,minutes:90}])});await flush();
+  assert.match(h.element('#app').innerHTML,/Total da data: 1h30/);assert.doesNotMatch(h.element('#app').innerHTML,/class="hours-launch-note"/);h.click('own-hours-edit',id);
+  assert.match(h.element('#modal').innerHTML,/<textarea id="hours-note" name="note" rows="2" maxlength="1000"><\/textarea>/);assert.equal(h.saveCalls(),0);
+});
+
+test('monthly diary sending and report views never include private launch observations',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth,date=month+'-01',privateNote='Observação reservada do lançamento';let payload;
+  const launches=[{id:freshLaunchId(151),date,minutes:1800,note:privateNote}];data.reports[month]={p_fixture:report({kind:'regular',hours:30,studies:3})};
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>launchBundle(requested,requested===month?launches:[],{version:requested===month?4:0}),
+    submitOwnHours:async value=>{payload=C.clone(value);return{status:'pending',version:1,hoursVersion:4,totalMinutes:1800};}});await flush();await h.change('active-month',month);await flush();h.click('own-hours-submit');
+  assert.doesNotMatch(h.element('#modal').innerHTML,/Observação reservada/);await h.submit('modal-form',{studies:'3',note:'forged private note'});await flush();
+  assert.deepEqual(payload,{month,participated:true,studies:3,expectedHoursVersion:4,expectedReportVersion:0});assert.doesNotMatch(JSON.stringify(h.window.EmDiaApp.getState()),/Observação reservada/);
+  h.click('tab','reports');await flush();assert.doesNotMatch(h.element('#app').innerHTML,/Observação reservada/);assert.doesNotMatch(JSON.stringify(h.window.EmDiaApp.reportSpec()),/Observação reservada/);assert.equal(h.saveCalls(),0);
+});
+
+test('a save response with a different observation is not accepted as confirmation',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday();let calls=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),
+    saveOwnHoursLaunch:async value=>{calls++;return launchBundle(month,[{id:value.id,date,minutes:value.minutes,note:'Outra versão'}],{version:1});}});await flush();h.click('own-hours-edit');h.input();
+  await h.submit('modal-form',{date,dayHours:'1',note:'Meu rascunho'});await flush();assert.equal(calls,1);assert.equal(h.element('#modal').open,true);assert.match(h.element('#form-error').textContent,/Não foi possível confirmar/);assert.doesNotMatch(h.element('#app').innerHTML,/Outra versão|Meu rascunho/);assert.equal(h.saveCalls(),0);
+});
+
+test('starting waits for the cloud and timer ticks update only the clock',async()=>{
+  const data=pioneerFixture(),pending=deferred(),now=Date.now(),payloads=[];
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),changeOwnTimer:value=>{payloads.push(C.clone(value));return pending.promise;}},{now});await flush();
+  assert.match(h.element('#app').innerHTML,/Pronto para iniciar|own-timer-start/);h.click('own-timer-start');assert.equal(payloads.length,1);assert.equal(payloads[0].action,'start');assert.equal(payloads[0].expectedVersion,0);
+  assert.match(h.element('#app').innerHTML,/Pronto para iniciar/);assert.equal(h.intervalCount(),0);h.click('own-timer-start');assert.equal(payloads.length,1);
+  pending.resolve(activeTimer('running',{timerId:payloads[0].timerId,elapsedMs:0,accumulatedMs:0}));await flush();assert.equal(h.intervalCount(),1);assert.match(h.element('#app').innerHTML,/Em contagem|own-timer-pause/);
+  const shown=h.element('#app').innerHTML;h.click('own-hours-edit');h.input();h.element('#hours-note').value='Rascunho durante a contagem';const form=h.element('#modal').innerHTML;
+  h.advance(65000);assert.equal(h.element('#own-timer-elapsed').textContent,'00:01:05');assert.equal(h.element('#app').innerHTML,shown);assert.equal(h.element('#modal').innerHTML,form);assert.equal(h.element('#hours-note').value,'Rascunho durante a contagem');assert.equal(h.saveCalls(),0);
+});
+
+test('pause, continue and stop use the current timer version and persist stopped time for review',async()=>{
+  const data=pioneerFixture(),payloads=[];let timer=activeTimer('running',{elapsedMs:65000});
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:async()=>timer,
+    changeOwnTimer:async value=>{payloads.push(C.clone(value));timer=activeTimer(({pause:'paused',resume:'running',stop:'stopped'})[value.action],{version:timer.version+1,elapsedMs:65000,accumulatedMs:65000});return timer;}},{now:Date.now()});await flush();
+  h.click('own-timer-pause');await flush();assert.equal(h.intervalCount(),0);h.advance(120000);assert.match(h.element('#app').innerHTML,/Pausado|00:01:05/);assert.doesNotMatch(h.element('#app').innerHTML,/data-action="own-timer-resume" disabled/);
+  h.click('own-timer-resume');await flush();assert.equal(h.intervalCount(),1);h.advance(5000);assert.equal(h.element('#own-timer-elapsed').textContent,'00:01:10');
+  h.click('own-timer-stop');await flush();assert.equal(h.intervalCount(),0);assert.match(h.element('#app').innerHTML,/Aguardando lançamento|Conferir e lançar/);assert.doesNotMatch(h.element('#app').innerHTML,/data-action="own-timer-start"/);
+  assert.equal(h.element('#modal').open,true);assert.match(h.element('#modal').innerHTML,/Conferir tempo e lançar/);assert.match(h.element('#modal').innerHTML,/name="dayHours"|Observação \(opcional\)/);h.click('modal-close');assert.equal(h.element('#modal').open,false);assert.match(h.element('#app').innerHTML,/Aguardando lançamento|Conferir e lançar/);
+  assert.deepEqual(payloads.map(value=>[value.action,value.expectedVersion]),[['pause',1],['resume',2],['stop',3]]);assert.ok(payloads.every(value=>value.timerId===timer.timerId));
+  const reopened=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:async()=>timer});await flush();assert.match(reopened.element('#app').innerHTML,/Aguardando lançamento|Conferir e lançar/);assert.equal(h.saveCalls(),0);
+});
+
+test('closing and hiding the app never pause or stop a cloud timer and reopening recovers elapsed time',async()=>{
+  const data=pioneerFixture(),now=Date.now();let elapsedMs=65000,actions=0,reads=0;
+  const services={profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:async()=>{reads++;return activeTimer('running',{elapsedMs});},changeOwnTimer:async()=>{actions++;}};
+  const h=harness(services,{now});await flush();assert.equal(h.intervalCount(),1);h.unload();h.visibility('hidden');assert.equal(h.intervalCount(),0);h.advance(120000);assert.equal(actions,0);
+  elapsedMs=185000;h.visibility('visible');await flush();assert.equal(h.element('#own-timer-elapsed').textContent,'00:03:05');assert.equal(h.intervalCount(),1);assert.ok(reads>=2);assert.equal(actions,0);
+  const reopened=harness(services,{now:now+120000});await flush();assert.match(reopened.element('#app').innerHTML,/00:03:05|Em contagem/);assert.equal(actions,0);assert.equal(h.saveCalls(),0);
+});
+
+test('an active timer remains usable outside the viewed pioneer month and after its condition ends',async()=>{
+  const data=pioneerFixture(),previous=data.activeMonth,current=testToday().slice(0,7),actions=[];data.people[0].roles[0].end=previous;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:async()=>activeTimer('running',{startDate:previous+'-28'}),
+    changeOwnTimer:async value=>{actions.push(C.clone(value));return activeTimer('stopped',{version:2,startDate:previous+'-28'});}});await flush();await h.change('active-month',current);await flush();
+  assert.match(h.element('#app').innerHTML,/class="section-card hours-timer"/);assert.match(h.element('#app').innerHTML,/own-timer-stop/);assert.doesNotMatch(h.element('#app').innerHTML,/Diário de horas/);
+  h.click('own-timer-stop');await flush();assert.equal(actions[0].action,'stop');h.click('own-timer-review');assert.match(h.element('#modal').innerHTML,/Conferir tempo e lançar/);assert.match(h.element('#modal').innerHTML,new RegExp('value="'+previous+'-28"'));
+});
+
+test('start is unavailable for ordinary publishers or a previous month while manager sessions never read a timer',async()=>{
+  let changes=0,managerReads=0;const normal=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle(),changeOwnTimer:async()=>{changes++;}});await flush();
+  assert.doesNotMatch(normal.element('#app').innerHTML,/own-timer-start/);normal.click('own-timer-start');await flush();assert.equal(changes,0);
+  const data=pioneerFixture(),past=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),changeOwnTimer:async()=>{changes++;}});await flush();await past.change('active-month',data.activeMonth);await flush();past.click('own-timer-start');await flush();assert.equal(changes,0);
+  const manager=harness({readOwnTimer:async()=>{managerReads++;return timerBundle();},changeOwnTimer:async()=>{changes++;}});await flush();manager.click('own-timer-start');await flush();assert.equal(managerReads,0);assert.equal(changes,0);
+});
+
+test('ambiguous timer actions disable further writes until a fresh authoritative read',async()=>{
+  const data=pioneerFixture();let calls=0,reads=0,timer=activeTimer('running');
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:async()=>{reads++;return timer;},
+    changeOwnTimer:async()=>{calls++;timer=activeTimer('paused',{version:2});throw new errors.ConflictError();}});await flush();h.click('own-timer-pause');await flush();
+  assert.equal(calls,1);assert.match(h.element('#app').innerHTML,/Status a confirmar|contagem na nuvem pode continuar/);assert.match(h.element('#app').innerHTML,/data-action="own-timer-pause" disabled/);
+  h.click('own-timer-pause');await flush();assert.equal(calls,1);h.click('own-timer-refresh');await flush();assert.equal(reads,2);assert.match(h.element('#app').innerHTML,/Pausado/);assert.doesNotMatch(h.element('#app').innerHTML,/Status a confirmar/);assert.equal(h.saveCalls(),0);
+});
+
+test('discarding stopped time requires confirmation and never creates a diary launch',async()=>{
+  const data=pioneerFixture();let calls=0,diaryWrites=0,payload;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:async()=>activeTimer('stopped',{version:7}),
+    changeOwnTimer:async value=>{calls++;payload=C.clone(value);return timerBundle({version:8});},saveOwnHoursLaunch:async()=>{diaryWrites++;},postOwnTimer:async()=>{diaryWrites++;}});await flush();
+  h.confirm(false);h.click('own-timer-discard');await flush();assert.equal(calls,0);assert.match(h.element('#app').innerHTML,/Aguardando lançamento/);
+  h.confirm(true);h.click('own-timer-discard');await flush();assert.deepEqual(payload,{action:'discard',timerId:freshLaunchId(501),expectedVersion:7});assert.match(h.element('#app').innerHTML,/Pronto para iniciar/);assert.equal(diaryWrites,0);assert.equal(h.saveCalls(),0);
+});
+
+test('stopped timer review rounds to minutes and posts edited time and private note atomically',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday(),timer=activeTimer('stopped',{version:4,elapsedMs:3631000,accumulatedMs:3631000});let payload,ordinaryWrites=0,changes=0,reads=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:async()=>timer,
+    readOwnHours:async requested=>{reads++;return launchBundle(requested,[],{version:3});},saveOwnHoursLaunch:async()=>{ordinaryWrites++;},changeOwnTimer:async()=>{changes++;},
+    postOwnTimer:async value=>{payload=C.clone(value);return{timer:timerBundle({version:5}),diary:launchBundle(month,[{id:value.launchId,date,minutes:value.minutes,note:value.note}],{version:4}),launchId:value.launchId,unchanged:false,receipt:{timerId:timer.timerId,launchId:value.launchId,date,minutes:value.minutes,note:value.note,postedAt:new Date().toISOString()}};}});await flush();h.click('own-timer-review');
+  assert.match(h.element('#modal').innerHTML,/01:00:31/);assert.match(h.element('#modal').innerHTML,/name="dayMinutes"[^>]*value="1"/);assert.match(h.element('#modal').innerHTML,/arredondado|Observação \(opcional\)/);
+  await h.submit('modal-form',{date,dayHours:'30',dayMinutes:'15',note:'  Observação do cronômetro\nsegunda linha  '});await flush();
+  assert.equal(reads,2);assert.equal(payload.expectedTimerVersion,4);assert.equal(payload.expectedHoursVersion,3);assert.equal(payload.minutes,1815);assert.equal(payload.note,'Observação do cronômetro\nsegunda linha');assert.notEqual(payload.launchId,timer.timerId);
+  assert.equal(h.element('#modal').open,false);assert.match(h.element('#app').innerHTML,/Total da data: 30h15|Observação do cronômetro/);assert.match(h.element('#app').innerHTML,/Pronto para iniciar/);assert.equal(ordinaryWrites,0);assert.equal(changes,0);assert.equal(h.saveCalls(),0);
+});
+
+test('timer posting reads the selected month freshly and retains its form on a rejected monthly total',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth,date=month+'-01',requests=[];let posts=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:async()=>activeTimer('stopped'),
+    readOwnHours:async requested=>{requests.push(requested);return launchBundle(requested,requested===month?[{id:freshLaunchId(601),date,minutes:44640,note:''}]:[]);},postOwnTimer:async()=>{posts++;}});await flush();h.click('own-timer-review');h.input();
+  await h.submit('modal-form',{date,dayHours:'1',note:'Rascunho preservado'});await flush();assert.equal(posts,0);assert.equal(requests.at(-1),month);assert.equal(h.element('#modal').open,true);assert.match(h.element('#form-error').textContent,/744 horas/);assert.doesNotMatch(h.element('#app').innerHTML,/Status a confirmar/);assert.equal(h.saveCalls(),0);
+});
+
+test('a pending timer post uses one stable launch ID and a replay can retain a newer active timer',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday(),pending=deferred(),timer=activeTimer('stopped',{version:4}),payloads=[];
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:async()=>timer,postOwnTimer:value=>{payloads.push(C.clone(value));return pending.promise;}});await flush();h.click('own-timer-review');
+  const submitted=h.submit('modal-form',{date,dayHours:'1',note:'Observação do envio'});await flush();await h.submit('modal-form',{date,dayHours:'1',note:'Observação do envio'});assert.equal(payloads.length,1);
+  const value=payloads[0],newTimer=activeTimer('running',{timerId:freshLaunchId(602),version:6,elapsedMs:5000});
+  pending.resolve({timer:newTimer,diary:launchBundle(month,[],{version:5}),launchId:value.launchId,unchanged:true,receipt:{timerId:timer.timerId,launchId:value.launchId,date,minutes:60,note:'Observação do envio',postedAt:new Date().toISOString()}});await submitted;await flush();
+  assert.equal(h.element('#modal').open,false);assert.match(h.element('#app').innerHTML,/Em contagem|00:00:05/);assert.equal(h.intervalCount(),1);assert.doesNotMatch(h.element('#app').innerHTML,/Observação do envio/);assert.equal(h.saveCalls(),0);
+});
+
+test('an ambiguous atomic timer post preserves its note and reload never submits or duplicates it',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday(),draft='Observação sem confirmação';let calls=0,timer=activeTimer('stopped'),launches=[];
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:async()=>timer,readOwnHours:async requested=>launchBundle(requested,requested===month?launches:[]),
+    postOwnTimer:async value=>{calls++;launches=[{id:value.launchId,date,minutes:value.minutes,note:value.note}];timer=timerBundle({version:3});throw new errors.CloudError('Connection lost');}});await flush();h.click('own-timer-review');h.element('#timer-launch-note').value=draft;h.input();
+  await h.submit('modal-form',{date,dayHours:'1',note:draft});await flush();assert.equal(calls,1);assert.equal(h.element('#modal').open,true);assert.equal(h.element('#timer-launch-note').value,draft);assert.match(h.element('#form-error').textContent,/tempo pode já ter sido lançado/);
+  await h.submit('modal-form',{date,dayHours:'1',note:draft});assert.equal(calls,1);h.confirm(false);h.click('own-timer-refresh');await flush();assert.equal(h.element('#modal').open,true);
+  h.confirm(true);h.click('own-timer-refresh');await flush();assert.equal(calls,1);assert.equal(h.element('#modal').open,false);assert.match(h.element('#app').innerHTML,/Total da data: 1h00|Observação sem confirmação/);assert.equal((h.element('#app').innerHTML.match(/class="hours-launch-order"/g)||[]).length,1);assert.equal(h.saveCalls(),0);
+});
+
+test('timer read and mutation responses cannot reopen another publisher binding or a signed-out session',async()=>{
+  const data=pioneerFixture(),waiting=deferred();let actions=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:()=>waiting.promise,changeOwnTimer:async()=>{actions++;}});await flush();h.auth('SIGNED_OUT',null);waiting.resolve(activeTimer());await flush();assert.doesNotMatch(h.element('#app').innerHTML,/Cronômetro|00:01:05/);assert.equal(h.intervalCount(),0);assert.equal(actions,0);
+  const mutation=deferred(),out=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:async()=>activeTimer(),changeOwnTimer:()=>mutation.promise});await flush();out.click('own-timer-stop');out.auth('SIGNED_OUT',null);mutation.resolve(activeTimer('stopped',{version:2}));await flush();assert.equal(out.window.EmDiaApp.getState(),null);assert.equal(out.intervalCount(),0);assert.doesNotMatch(out.element('#app').innerHTML,/Cronômetro|Aguardando lançamento/);
+  const invalid=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:async()=>activeTimer('running',{personId:'p_other'})});await flush();assert.match(invalid.element('#app').innerHTML,/Não foi possível confirmar o cronômetro/);assert.doesNotMatch(invalid.element('#app').innerHTML,/00:01:05|data-action="own-timer-stop"/);
+});
+
+test('a late atomic timer post cannot display its private note after sign-out',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday(),pending=deferred(),timer=activeTimer('stopped');let payload;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnTimer:async()=>timer,postOwnTimer:value=>{payload=C.clone(value);return pending.promise;}});await flush();h.click('own-timer-review');const submitted=h.submit('modal-form',{date,dayHours:'1',note:'Nota da sessão antiga'});await flush();h.auth('SIGNED_OUT',null);
+  pending.resolve({timer:timerBundle({version:3}),diary:launchBundle(month,[{id:payload.launchId,date,minutes:60,note:payload.note}],{version:1}),launchId:payload.launchId,unchanged:false,receipt:{timerId:timer.timerId,launchId:payload.launchId,date,minutes:60,note:payload.note,postedAt:new Date().toISOString()}});await submitted;await flush();
+  assert.equal(h.window.EmDiaApp.getState(),null);assert.equal(h.element('#modal').innerHTML,'');assert.doesNotMatch(h.element('#app').innerHTML,/Cronômetro|Nota da sessão antiga/);assert.equal(h.intervalCount(),0);
+});
+
+test('unposted running time never enters the monthly goal or received activity',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),date=testToday();data.reports[month]={p_fixture:report({kind:'regular',hours:55,studies:4})};
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>hoursBundle(month,{[date]:60}),readOwnTimer:async()=>activeTimer('running',{elapsedMs:30*3600000})},{now:Date.now()});await flush();
+  assert.match(h.element('#app').innerHTML,/30:00:00/);assert.match(monthlyGoalMarkup(h),/1h00|49h00/);assert.doesNotMatch(monthlyGoalMarkup(h),/31h00|19h00|30h00/);h.advance(3600000);assert.equal(h.element('#own-timer-elapsed').textContent,'31:00:00');assert.match(monthlyGoalMarkup(h),/1h00|49h00/);
+  assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,55);assert.equal(h.saveCalls(),0);
 });

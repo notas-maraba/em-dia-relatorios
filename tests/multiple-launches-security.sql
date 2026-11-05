@@ -60,9 +60,9 @@ begin
     jsonb_build_array(jsonb_build_object('id',v_a,'date','2024-02-29','minutes',0.5)));
   assert not em_dia_private.valid_hour_launches('2024-02','{"2024-02-29":1}'::jsonb,
     jsonb_build_array(jsonb_build_object('id',v_a,'date','2024-02-29','minutes',1,'notes','UNWANTED')));
-  assert not em_dia_private.valid_hour_launches('2024-02','{"2024-02-29":1441}'::jsonb,
+  assert not em_dia_private.valid_hour_launches('2024-02','{"2024-02-29":44641}'::jsonb,
     jsonb_build_array(jsonb_build_object('id',v_a,'date','2024-02-29','minutes',1440),
-      jsonb_build_object('id',v_b,'date','2024-02-29','minutes',1)));
+      jsonb_build_object('id',v_b,'date','2024-02-29','minutes',43201)));
   assert not em_dia_private.valid_hour_launches('2024-02','{"2024-02-01":0}'::jsonb,
     (select jsonb_agg(jsonb_build_object('id',gen_random_uuid(),'date','2024-02-01','minutes',0)) from generate_series(1,1001)));
 
@@ -118,7 +118,7 @@ begin
   perform pg_temp.expect_launch_error(format('select public.save_em_dia_own_hour_launch(null,%L,30,0)',v_month||'-01'),'22023');
   perform pg_temp.expect_launch_error(format('select public.save_em_dia_own_hour_launch(%L,%L,30,0)',v_a,'2025-02-29'),'22023');
   perform pg_temp.expect_launch_error(format('select public.save_em_dia_own_hour_launch(%L,%L,30,0)',v_a,v_future),'22023');
-  perform pg_temp.expect_launch_error(format('select public.save_em_dia_own_hour_launch(%L,%L,1441,0)',v_a,v_month||'-01'),'22023');
+  perform pg_temp.expect_launch_error(format('select public.save_em_dia_own_hour_launch(%L,%L,44641,0)',v_a,v_month||'-01'),'22023');
   perform pg_temp.expect_launch_error(format('select public.save_em_dia_own_hour_launch(%L,%L,-1,0)',v_a,v_month||'-01'),'22023');
 
   v_result:=public.save_em_dia_own_hour_launch(v_a,v_month||'-01',80,0);v_version:=(v_result->>'version')::bigint;
@@ -156,10 +156,10 @@ begin
   v_result:=public.save_em_dia_own_hour_launch(v_c,v_month||'-01',30,v_version);v_version:=(v_result->>'version')::bigint;
   v_result:=public.save_em_dia_own_hour_launch(v_zero,v_month||'-01',null,v_version);v_version:=(v_result->>'version')::bigint;
   assert v_version=9 and v_result#>array['entries',v_month||'-01']='30'::jsonb;
-  perform pg_temp.expect_launch_error(format('select public.save_em_dia_own_hour_launch(%L,%L,1411,9)',v_d,v_month||'-01'),'22023');
+  perform pg_temp.expect_launch_error(format('select public.save_em_dia_own_hour_launch(%L,%L,44641,9)',v_d,v_month||'-01'),'22023');
   v_result:=public.save_em_dia_own_hour_launch(v_d,v_month||'-01',1410,v_version);v_version:=(v_result->>'version')::bigint;
   assert v_version=10 and v_result#>array['entries',v_month||'-01']='1440'::jsonb;
-  perform pg_temp.expect_launch_error(format('select public.save_em_dia_own_hour_launch(%L,%L,1,10)',v_e,v_month||'-01'),'22023');
+  perform pg_temp.expect_launch_error(format('select public.save_em_dia_own_hour_launch(%L,%L,44641,10)',v_e,v_month||'-01'),'22023');
   v_result:=public.save_em_dia_own_hour_launch(v_e,v_month||'-02',1300,v_version);v_version:=(v_result->>'version')::bigint;
   v_result:=public.save_em_dia_own_hour_launch(v_f,v_month||'-03',410,v_version);v_version:=(v_result->>'version')::bigint;
   assert v_version=12 and (v_result->>'total_minutes')::integer=3150;
