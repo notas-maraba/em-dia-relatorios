@@ -10,6 +10,8 @@ O primeiro relatório enviado pelo publicador é recebido automaticamente. Se mu
 
 Nos meses de pioneiro regular ou auxiliar, Meu cartão também oferece um diário de horas. O publicador registra horas e minutos em cada dia, edita os lançamentos e acompanha a soma do mês. Os lançamentos são salvos na nuvem e só aparecem para o acesso vinculado àquele cartão. Eles não são relatórios entregues e não alteram o total já recebido.
 
+É possível salvar vários lançamentos na mesma data. Cada um aparece separado para editar ou excluir; o aplicativo soma os lançamentos do dia e do mês. Um novo lançamento acrescenta horas ao dia. Editar ou excluir atua apenas no registro escolhido. A soma diária permanece limitada a 24 horas; o acumulado mensal pode ultrapassar a meta de 50 horas. Os registros anteriores são preservados como um lançamento por dia, com os mesmos minutos.
+
 Nos meses de pioneiro regular, o diário mostra o acompanhamento da meta mensal de 50 horas: horas registradas, progresso, quanto falta e média diária necessária até encerrar o mês. A média considera os dias restantes incluindo hoje e arredonda para cima em minutos. Atingir a meta mostra a conclusão e eventual excedente; meses encerrados não apresentam ritmo futuro. Um mês antigo sem lançamentos diários permanece sem cálculo de falta, mesmo quando há relatório mensal recebido. O painel usa somente os minutos do diário, sem somar novamente as horas do relatório.
 
 As referências fornecidas para o pioneiro regular são 50 horas por mês e 600 horas por ano. Nesta etapa, o painel acompanha apenas o mês. Não há meta automática para pioneiro auxiliar. Essas referências orientam o acompanhamento pessoal e não impedem salvar ou enviar relatórios com outro total.

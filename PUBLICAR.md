@@ -21,6 +21,8 @@ Em atualizações, preserve a base e as contas. Não reaplique a criação do sc
 
 Na atualização do diário de horas, a migração deve preceder a interface. Ela cria armazenamento privado e funções autorizadas, sem inventar lançamentos para totais antigos nem substituir os relatórios recebidos. Verifique os testes de isolamento, datas, controle de versão, envio de mês encerrado e transferência com diário. Guarde uma cópia privada das tabelas atuais, incluindo vínculos e revisões. As cópias futuras do banco devem incluir também os diários, que não fazem parte do backup JSON do grupo. Não altere dados reais para testar.
 
+Na atualização para vários lançamentos por dia, guarde uma cópia privada atualizada incluindo o diário antes de aplicar a migração. A migração representa cada dia existente por um único lançamento, preservando os totais, versões e datas de atualização. Aplique a estrutura antes da interface e confira o teste transacional de múltiplos lançamentos. Uma versão antiga pode consultar o total do dia, mas precisa ser atualizada para modificar um dia que contenha vários registros separados.
+
 ## Instalação no celular
 
 Publique também manifest.webmanifest, sw.js, assets/install.js e assets/icons/. A instalação usa HTTPS no endereço público e abre em janela de aplicativo. Não precisa de uma loja de aplicativos.

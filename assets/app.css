@@ -195,6 +195,13 @@
   .hours-days li strong{font-size:12px}
   .hours-days li span{font-size:14px;font-weight:650}
   .hours-days li button{min-height:44px;flex-shrink:0}
+  .hours-days .hours-day{display:block;padding:8px 0}
+  .hours-day-heading{justify-content:space-between;gap:5px 8px;margin-bottom:3px}
+  .hours-day-heading>span{font-size:12px;color:var(--green)}
+  .hours-launches{margin:0;padding:0;list-style:none}
+  .hours-launches>li{padding:4px 0}
+  .hours-launches .hours-launch-order{font-size:11px;font-weight:400;color:var(--muted)}
+  .hours-launches li strong{font-size:14px}
   .hours-entry input{font-size:16px;min-width:0}
   .hours-send-total>span{display:block;font-size:12px}
   .hours-send-total>strong{display:block;font-size:26px;margin-top:4px;color:var(--green)}
