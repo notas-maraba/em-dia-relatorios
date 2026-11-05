@@ -8,6 +8,8 @@
   'use strict';
   const DEFAULT_REDIRECT = 'https://notas-maraba.github.io/em-dia-relatorios/';
   const ROLES = ['admin', 'superintendent', 'publisher'];
+  const MAX_DIARY_MINUTES = 744 * 60;
+  const MAX_NOTE_LENGTH = 1000;
 
   class CloudError extends Error {
     constructor(message, code = 'cloud_error', cause) {
@@ -48,6 +50,21 @@
     return new CloudError(writing
       ? 'Não foi possível confirmar o salvamento na nuvem. Recarregue os dados antes de tentar novamente.'
       : 'Não foi possível acessar a nuvem. Confira sua conexão e tente novamente.', code || 'network_error', error);
+  }
+
+  function privateDiaryError(error, writing = false) {
+    const mapped = mappedError(error, writing);
+    // SDK transport exceptions may retain a request or response containing a
+    // private note. Keep only static messages and a closed set of safe codes.
+    if (mapped instanceof AuthRequiredError) return new AuthRequiredError();
+    if (mapped instanceof AccessDeniedError) return new AccessDeniedError();
+    if (mapped instanceof ConflictError) return new ConflictError();
+    const code = ['invalid_response', '22023'].includes(mapped.code) ? mapped.code : 'network_error';
+    const message = code === 'invalid_response'
+      ? 'A nuvem retornou dados inválidos. Recarregue seu cartão.'
+      : writing ? 'Não foi possível confirmar o salvamento na nuvem. Recarregue os dados antes de tentar novamente.'
+        : 'Não foi possível acessar a nuvem. Confira sua conexão e tente novamente.';
+    return new CloudError(message, code);
   }
 
   function copy(value) {
@@ -103,10 +120,6 @@
     return value.toLowerCase();
   }
 
-  function monthMinutes(month) {
-    return new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate() * 1440;
-  }
-
   function responseVersion(value, minimum = 0) {
     if (!(typeof value === 'number' || typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value))) {
       throw new CloudError('A nuvem retornou uma versão inválida.', 'invalid_response');
@@ -120,11 +133,11 @@
       if (row.group_id !== current.defaultGroupId || row.person_id !== current.publisherId || row.month !== month ||
           !['publisher', 'regular', 'auxiliary'].includes(row.kind) || !stateObject(row.entries) ||
           typeof row.closed !== 'boolean' || !Number.isSafeInteger(row.total_minutes) || row.total_minutes < 0 ||
-          row.total_minutes > monthMinutes(month) || !(row.updated_at === null || typeof row.updated_at === 'string')) throw new Error('Invalid diary');
+          row.total_minutes > MAX_DIARY_MINUTES || !(row.updated_at === null || typeof row.updated_at === 'string')) throw new Error('Invalid diary');
       const today = checkedDate(row.today), entries = Object.entries(row.entries), version = responseVersion(row.version);
       if (month > today.slice(0, 7) || row.closed !== (month < today.slice(0, 7)) || entries.length > 31 ||
           version === 0 && entries.length || entries.some(([date, minutes]) => checkedDate(date).slice(0, 7) !== month || date > today ||
-            !Number.isSafeInteger(minutes) || minutes < 0 || minutes > 1440) ||
+            !Number.isSafeInteger(minutes) || minutes < 0 || minutes > MAX_DIARY_MINUTES) ||
           entries.reduce((total, [, minutes]) => total + minutes, 0) !== row.total_minutes) throw new Error('Invalid diary');
       return {groupId: row.group_id, personId: row.person_id, month, kind: row.kind,
         entries: Object.fromEntries(entries), version, totalMinutes: row.total_minutes, closed: row.closed,
@@ -135,19 +148,21 @@
   function ownHourLaunchesResult(row, current, month) {
     const diary = ownHoursResult(row, current, month);
     try {
-      if (!Array.isArray(row.launches) || row.launches.length > 1000 || JSON.stringify(row.launches).length > 262144) {
+      if (!Array.isArray(row.launches) || row.launches.length > 1000 || new TextEncoder().encode(JSON.stringify(row.launches)).length > 262144) {
         throw new Error('Invalid launches');
       }
       const ids = new Set(), daily = Object.create(null);
       const launches = row.launches.map(item => {
         if (!stateObject(item)) throw new Error('Invalid launch');
-        const id = checkedLaunchId(item.id), date = checkedDate(item.date), minutes = item.minutes;
+        const id = checkedLaunchId(item.id), date = checkedDate(item.date), minutes = item.minutes,
+          note = Object.hasOwn(item, 'note') ? item.note : '';
         if (ids.has(id) || date.slice(0, 7) !== month || date > diary.today ||
-            !Number.isSafeInteger(minutes) || minutes < 0 || minutes > 1440) throw new Error('Invalid launch');
+            !Number.isSafeInteger(minutes) || minutes < 0 || minutes > MAX_DIARY_MINUTES ||
+            typeof note !== 'string' || note.length > MAX_NOTE_LENGTH) throw new Error('Invalid launch');
         ids.add(id);
         daily[date] = (daily[date] || 0) + minutes;
-        if (daily[date] > 1440) throw new Error('Invalid daily sum');
-        return {id, date, minutes};
+        if (daily[date] > MAX_DIARY_MINUTES) throw new Error('Invalid recorded sum');
+        return {id, date, minutes, note};
       });
       const dates = Object.keys(daily);
       if (dates.length !== Object.keys(diary.entries).length ||
@@ -156,6 +171,42 @@
       }
       return {...diary, launches};
     } catch (_) { throw new CloudError('A nuvem retornou lançamentos inválidos. Recarregue seu diário.', 'invalid_response'); }
+  }
+
+  function responseInstant(value) {
+    if (typeof value !== 'string' || !/^(19|20|21)\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?(?:Z|[+-]([01]\d|2[0-3]):[0-5]\d)$/.test(value) ||
+        checkedDate(value.slice(0, 10)) !== value.slice(0, 10) || !Number.isSafeInteger(Date.parse(value))) throw new Error('Invalid clock');
+    return Date.parse(value);
+  }
+
+  function ownTimerResult(row, current) {
+    try {
+      if (row.group_id !== current.defaultGroupId || row.person_id !== current.publisherId ||
+          !['idle', 'running', 'paused', 'stopped'].includes(row.status) ||
+          !Number.isSafeInteger(row.accumulated_ms) || row.accumulated_ms < 0 ||
+          !Number.isSafeInteger(row.elapsed_ms) || row.elapsed_ms < 0) throw new Error('Invalid timer');
+      const serverMs = responseInstant(row.server_now), version = responseVersion(row.version);
+      if (row.status === 'idle') {
+        if (row.timer_id !== null || row.start_date !== null || row.started_at !== null || row.anchor_at !== null ||
+            row.stopped_at !== null || row.accumulated_ms !== 0 || row.elapsed_ms !== 0) throw new Error('Invalid idle timer');
+      } else {
+        checkedLaunchId(row.timer_id); checkedDate(row.start_date);
+        const startedMs = responseInstant(row.started_at);
+        if (startedMs > serverMs || version === 0) throw new Error('Invalid start');
+        if (row.status === 'running') {
+          const anchorMs = responseInstant(row.anchor_at);
+          if (row.stopped_at !== null || anchorMs < startedMs || anchorMs > serverMs || row.elapsed_ms < row.accumulated_ms ||
+              Math.abs(row.elapsed_ms - row.accumulated_ms - (serverMs - anchorMs)) > 1) throw new Error('Invalid running clock');
+        } else {
+          if (row.anchor_at !== null || row.elapsed_ms !== row.accumulated_ms) throw new Error('Invalid fixed clock');
+          if (row.status === 'paused' ? row.stopped_at !== null :
+            responseInstant(row.stopped_at) < startedMs || responseInstant(row.stopped_at) > serverMs) throw new Error('Invalid stop');
+        }
+      }
+      return {groupId: row.group_id, personId: row.person_id, timerId: row.timer_id === null ? null : checkedLaunchId(row.timer_id),
+        status: row.status, version, startDate: row.start_date, startedAt: row.started_at, anchorAt: row.anchor_at,
+        stoppedAt: row.stopped_at, accumulatedMs: row.accumulated_ms, elapsedMs: row.elapsed_ms, serverNow: row.server_now};
+    } catch (_) { throw new CloudError('A nuvem retornou um cronômetro inválido. Recarregue seu cartão.', 'invalid_response'); }
   }
 
   function checkedVersion(value, minimum = 0) {
@@ -360,13 +411,13 @@
         const result = await client.rpc('read_em_dia_own_hour_launches', {p_month: selectedMonth});
         if (result.error) throw result.error;
         return ownHourLaunchesResult(objectResult(result.data), current, selectedMonth);
-      } catch (error) { throw mappedError(error); }
+      } catch (error) { throw privateDiaryError(error); }
     }
 
     async function saveOwnHours({date, minutes, expectedVersion} = {}) {
       const selectedDate = checkedDate(date), version = checkedVersion(expectedVersion);
-      if (!(minutes === null || Number.isSafeInteger(minutes) && minutes >= 0 && minutes <= 1440)) {
-        throw new CloudError('Informe um total de 0 a 24 horas para este dia.', 'invalid_minutes');
+      if (!(minutes === null || Number.isSafeInteger(minutes) && minutes >= 0 && minutes <= MAX_DIARY_MINUTES)) {
+        throw new CloudError('Informe um total de 0 a 744 horas para esta data.', 'invalid_minutes');
       }
       try {
         const current = await profile();
@@ -383,27 +434,30 @@
       } catch (error) { throw mappedError(error, true); }
     }
 
-    async function saveOwnHoursLaunch({id, date, minutes, expectedVersion} = {}) {
+    async function saveOwnHoursLaunch({id, date, minutes, note = null, expectedVersion} = {}) {
       const launchId = checkedLaunchId(id), selectedDate = checkedDate(date), version = checkedVersion(expectedVersion);
-      if (!(minutes === null || Number.isSafeInteger(minutes) && minutes >= 0 && minutes <= 1440)) {
-        throw new CloudError('Informe de 0 a 24 horas para este lançamento.', 'invalid_minutes');
+      if (!(minutes === null || Number.isSafeInteger(minutes) && minutes >= 0 && minutes <= MAX_DIARY_MINUTES)) {
+        throw new CloudError('Informe de 0 a 744 horas para este lançamento.', 'invalid_minutes');
+      }
+      if (!(note === null || typeof note === 'string' && note.length <= MAX_NOTE_LENGTH)) {
+        throw new CloudError('Informe uma observação com até 1000 caracteres ou deixe em branco.', 'invalid_note');
       }
       try {
         const current = await profile();
         if (current.role !== 'publisher') throw new AccessDeniedError();
-        const result = await client.rpc('save_em_dia_own_hour_launch', {
-          p_id: launchId, p_date: selectedDate, p_minutes: minutes, p_expected_version: version
+        const result = await client.rpc('save_em_dia_own_hour_launch_note', {
+          p_id: launchId, p_date: selectedDate, p_minutes: minutes, p_note: note, p_expected_version: version
         });
         if (result.error) throw result.error;
         const row = objectResult(result.data), saved = ownHourLaunchesResult(row, current, selectedDate.slice(0, 7));
         const launch = saved.launches.find(item => item.id === launchId);
         if (!['regular', 'auxiliary'].includes(saved.kind) || typeof row.unchanged !== 'boolean' || selectedDate > saved.today ||
-            (minutes === null ? !!launch : !launch || launch.date !== selectedDate || launch.minutes !== minutes) ||
+            (minutes === null ? !!launch : !launch || launch.date !== selectedDate || launch.minutes !== minutes || note !== null && launch.note !== note) ||
             (row.unchanged ? saved.version < version : saved.version !== version + 1)) {
           throw new CloudError('Não foi possível confirmar o lançamento. Recarregue o diário antes de tentar novamente.', 'invalid_response');
         }
         return {...saved, unchanged: row.unchanged};
-      } catch (error) { throw mappedError(error, true); }
+      } catch (error) { throw privateDiaryError(error, true); }
     }
 
     async function submitOwnHours({month, participated, studies, expectedHoursVersion, expectedReportVersion} = {}) {
@@ -421,7 +475,7 @@
         const row = objectResult(result.data), savedVersion = responseVersion(row.version), savedHoursVersion = responseVersion(row.hours_version, 1);
         if (!['accepted', 'pending'].includes(row.status) || row.group_id !== current.defaultGroupId || row.person_id !== current.publisherId ||
             row.month !== selectedMonth || typeof row.unchanged !== 'boolean' || savedHoursVersion !== hoursVersion ||
-            !Number.isSafeInteger(row.total_minutes) || row.total_minutes < 0 || row.total_minutes > monthMinutes(selectedMonth) ||
+            !Number.isSafeInteger(row.total_minutes) || row.total_minutes < 0 || row.total_minutes > MAX_DIARY_MINUTES ||
             (savedVersion === 0 && !(row.status === 'accepted' && row.unchanged)) ||
             (!row.unchanged && savedVersion !== reportVersion + 1)) {
           throw new CloudError('Não foi possível confirmar o envio do mês. Recarregue seu cartão antes de tentar novamente.', 'invalid_response');
@@ -429,6 +483,66 @@
         return {status: row.status, version: savedVersion, groupId: row.group_id, personId: row.person_id, month: row.month,
           revision: responseVersion(row.revision, 1), unchanged: row.unchanged, hoursVersion: savedHoursVersion, totalMinutes: row.total_minutes};
       } catch (error) { throw mappedError(error, true); }
+    }
+
+    async function readOwnTimer() {
+      try {
+        const current = await profile();
+        if (current.role !== 'publisher') throw new AccessDeniedError();
+        const result = await client.rpc('read_em_dia_own_timer');
+        if (result.error) throw result.error;
+        return ownTimerResult(objectResult(result.data), current);
+      } catch (error) { throw privateDiaryError(error); }
+    }
+
+    async function changeOwnTimer({action, timerId, expectedVersion} = {}) {
+      const statuses = {start: 'running', pause: 'paused', resume: 'running', stop: 'stopped', discard: 'idle'};
+      if (typeof action !== 'string' || !Object.hasOwn(statuses, action)) throw new CloudError('Escolha uma ação válida para o cronômetro.', 'invalid_timer_action');
+      const id = checkedLaunchId(timerId), version = checkedVersion(expectedVersion);
+      try {
+        const current = await profile();
+        if (current.role !== 'publisher') throw new AccessDeniedError();
+        const result = await client.rpc('change_em_dia_own_timer', {p_action: action, p_timer_id: id, p_expected_version: version});
+        if (result.error) throw result.error;
+        const row = objectResult(result.data), saved = ownTimerResult(row, current);
+        if (typeof row.unchanged !== 'boolean' || saved.status !== statuses[action] ||
+            (action === 'discard' ? saved.timerId !== null : saved.timerId !== id) ||
+            (row.unchanged ? saved.version < version : saved.version !== version + 1)) {
+          throw new CloudError('Não foi possível confirmar o cronômetro. Recarregue seu cartão.', 'invalid_response');
+        }
+        return {...saved, unchanged: row.unchanged};
+      } catch (error) { throw privateDiaryError(error, true); }
+    }
+
+    async function postOwnTimer({timerId, expectedTimerVersion, launchId, date, minutes, note = '', expectedHoursVersion} = {}) {
+      const id = checkedLaunchId(timerId), itemId = checkedLaunchId(launchId), selectedDate = checkedDate(date),
+        timerVersion = checkedVersion(expectedTimerVersion, 1), hoursVersion = checkedVersion(expectedHoursVersion), launchNote = note === null ? '' : note;
+      if (!Number.isSafeInteger(minutes) || minutes < 0 || minutes > MAX_DIARY_MINUTES) throw new CloudError('Informe de 0 a 744 horas para este lançamento.', 'invalid_minutes');
+      if (typeof launchNote !== 'string' || launchNote.length > MAX_NOTE_LENGTH) throw new CloudError('Informe uma observação com até 1000 caracteres ou deixe em branco.', 'invalid_note');
+      try {
+        const current = await profile();
+        if (current.role !== 'publisher') throw new AccessDeniedError();
+        const result = await client.rpc('post_em_dia_own_timer', {p_timer_id: id, p_expected_timer_version: timerVersion,
+          p_launch_id: itemId, p_date: selectedDate, p_minutes: minutes, p_note: launchNote, p_expected_hours_version: hoursVersion});
+        if (result.error) throw result.error;
+        const row = objectResult(result.data), timer = ownTimerResult(row.timer, current),
+          diary = ownHourLaunchesResult(row.diary, current, selectedDate.slice(0, 7)), receipt = row.receipt,
+          launch = diary.launches.find(item => item.id === itemId);
+        let postedMs;
+        try { postedMs = responseInstant(receipt?.posted_at); }
+        catch (_) { throw new CloudError('A nuvem retornou um recibo de cronômetro inválido.', 'invalid_response'); }
+        if (typeof row.unchanged !== 'boolean' || typeof row.launch_id !== 'string' || row.launch_id.toLowerCase() !== itemId || !stateObject(receipt) ||
+            typeof receipt.timer_id !== 'string' || receipt.timer_id.toLowerCase() !== id ||
+            typeof receipt.launch_id !== 'string' || receipt.launch_id.toLowerCase() !== itemId || receipt.date !== selectedDate ||
+            receipt.minutes !== minutes || receipt.note !== launchNote || postedMs > responseInstant(timer.serverNow) ||
+            (row.unchanged ? timer.version <= timerVersion || diary.version <= hoursVersion :
+              timer.status !== 'idle' || timer.version !== timerVersion + 1 || diary.version !== hoursVersion + 1 ||
+              !launch || launch.date !== selectedDate || launch.minutes !== minutes || launch.note !== launchNote)) {
+          throw new CloudError('Não foi possível confirmar o lançamento do cronômetro. Recarregue seu cartão.', 'invalid_response');
+        }
+        return {timer, diary, launchId: itemId, unchanged: row.unchanged, receipt: {timerId: id, launchId: itemId,
+          date: selectedDate, minutes, note: launchNote, postedAt: receipt.posted_at}};
+      } catch (error) { throw privateDiaryError(error, true); }
     }
 
     async function listRevisions(groupId) {
@@ -646,7 +760,7 @@
       };
     }
 
-    return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, submitOwnReport, readOwnHours, saveOwnHours, saveOwnHoursLaunch, submitOwnHours, listRevisions, reviewRevision,
+    return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, submitOwnReport, readOwnHours, saveOwnHours, saveOwnHoursLaunch, submitOwnHours, readOwnTimer, changeOwnTimer, postOwnTimer, listRevisions, reviewRevision,
       transferGroups, transferPublisher, publisherAccounts, listUsers, createUser, assignUser, createPublisherUser,
       login, loginPassword, logout, session, subscribeAuth});
   }
