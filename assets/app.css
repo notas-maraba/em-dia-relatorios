@@ -171,6 +171,21 @@
   .hours-summary{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 12px;margin:12px 0 8px}
   .hours-summary>strong{font-size:26px;color:var(--green);line-height:1.15}
   .hours-summary>span{font-size:12px;color:var(--muted)}
+  .hours-goal{margin:10px 0 8px;padding:10px 12px;border-radius:12px;background:var(--soft);min-width:0}
+  .hours-goal-heading,.hours-goal-caption{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 10px}
+  .hours-goal-heading{font-size:12px;color:var(--green)}
+  .hours-goal-heading>span{font-weight:750}
+  .hours-goal-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:8px 0}
+  .hours-goal-stats>div{min-width:0}
+  .hours-goal-stats span{display:block;font-size:11px;color:var(--muted)}
+  .hours-goal-stats strong{display:block;font-size:23px;line-height:1.15;margin-top:3px;overflow-wrap:anywhere}
+  .hours-goal-stats>div:first-child strong{color:var(--green)}
+  .hours-goal-progress{height:6px;border-radius:8px;background:var(--line);overflow:hidden}
+  .hours-goal-progress>span{display:block;height:100%;background:var(--green);border-radius:inherit}
+  .hours-goal-caption{margin-top:5px;font-size:10px;color:var(--muted)}
+  .hours-goal-pace{margin:8px 0 0;font-size:12px;line-height:1.45}
+  .hours-goal-pace>span{display:block;font-size:10px;color:var(--muted)}
+  .hours-goal-pace.success{color:var(--green)}
   .hours-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
   .hours-days{margin-top:8px}
   .hours-days>summary{min-height:44px;padding:12px 0;font-weight:650;cursor:pointer;color:var(--green)}

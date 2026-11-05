@@ -9,7 +9,7 @@ const SITE = 'https://notas-maraba.github.io/em-dia-relatorios/';
 const source = file => fs.readFileSync(path.join(ROOT, file), 'utf8');
 const VERSION = JSON.parse(source('package.json')).version;
 
-function worker() {
+function worker(code = source('sw.js')) {
   const listeners = {}, stores = new Map(), requests = [], deleted = [], fetched = [];
   let failNetwork = false, claims = 0, skipped = 0;
   function store(name) {
@@ -22,7 +22,7 @@ function worker() {
     caches: {async open(name) { return store(name); }, async keys() { return [...stores.keys()]; }, async delete(name) { deleted.push(name); return stores.delete(name); }},
     async fetch(request) { fetched.push(request.url || request); if (failNetwork) throw new Error('offline'); return new Response('CURRENT PUBLIC HTML'); }
   };
-  vm.runInNewContext(source('sw.js'), sandbox);
+  vm.runInNewContext(code, sandbox);
   return {stores, requests, deleted, fetched, get claims() { return claims; }, get skipped() { return skipped; },
     failNetwork() { failNetwork = true; },
     async lifecycle(name) { let pending; listeners[name]({waitUntil(value) { pending = value; }}); await pending; },
@@ -51,6 +51,20 @@ function installUI({origin = 'https://notas-maraba.github.io', pathname = '/em-d
   return {events, documentEvents, classes, buttons, dialog, media, registered, click};
 }
 const turn = () => new Promise(resolve => setImmediate(resolve));
+
+test('new UI requests its matching core release even while an older shell worker is active', async () => {
+  const html = source('index.html');
+  const corePath = html.match(/<script src="([^"]*core\.js[^"]*)"/)[1];
+  assert.equal(corePath, 'assets/core.js?v=' + VERSION);
+  const current = worker(); await current.lifecycle('install');
+  const coreUrl = new URL(corePath, SITE).href;
+  assert.ok(current.requests.some(request => request.url === coreUrl));
+  const previousShell = source('sw.js').replaceAll(VERSION, 'previous-release')
+    .replace('assets/core.js?v=previous-release', 'assets/core.js');
+  const previous = worker(previousShell); await previous.lifecycle('install');
+  assert.equal((await previous.request(coreUrl)).handled, false,
+    'An old unversioned core cache must not intercept the updated core request');
+});
 
 test('manifest resolves inside the GitHub Pages folder and uses real install icon dimensions', () => {
   const manifest = JSON.parse(source('manifest.webmanifest'));

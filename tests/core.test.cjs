@@ -12,6 +12,74 @@ test('Normaliza busca acentuada',()=>assert.equal(C.norm('  José  da Silva '),'
 test('Decimal com vírgula',()=>assert.equal(C.num('15,5'),15.5));
 test('Vazio não é zero',()=>assert.equal(C.num(''),null));
 test('Zero explícito é zero',()=>assert.equal(C.num('0'),0));
+const goalInput={kind:'regular',month:'2032-04',today:'2032-04-08',totalMinutes:320,entryCount:3};
+test('Meta configurada registra 50 horas mensais e 600 anuais sem alterar a versão dos dados',()=>{
+  assert.equal(C.regularMonthlyGoal(goalInput).targetMinutes,3000);
+  assert.equal(C.REGULAR_PIONEER_TARGETS.annualHours,C.REGULAR_PIONEER_TARGETS.monthlyHours*12);
+  assert.equal(C.REGULAR_PIONEER_TARGETS.annualHours,600);
+  assert(Object.isFrozen(C.REGULAR_PIONEER_TARGETS));assert.equal(C.VERSION,1);
+});
+test('Meta mensal soma em minutos, informa falta exata e arredonda ritmo para cima',()=>{
+  const g=C.regularMonthlyGoal(goalInput);
+  assert.equal(g.recordedMinutes,320);assert.equal(g.remainingMinutes,2680);
+  assert.equal(g.percentage,10.7);assert.equal(g.barPercentage,10.7);
+  assert.equal(g.daysRemaining,23);assert.equal(g.dailyMinutesNeeded,117);assert.equal(g.status,'in_progress');
+});
+test('Meta conta hoje como dia disponível e o último dia não divide por zero',()=>{
+  const g=C.regularMonthlyGoal({...goalInput,today:'2032-04-30',totalMinutes:2999});
+  assert.equal(g.daysRemaining,1);assert.equal(g.dailyMinutesNeeded,1);assert.equal(g.remainingMinutes,1);
+  assert.equal(g.percentage,99.9);assert.equal(g.barPercentage,99.9);assert.equal(g.status,'in_progress');
+});
+test('Meta em fevereiro respeita ano bissexto e último dia válido',()=>{
+  const g=C.regularMonthlyGoal({...goalInput,month:'2032-02',today:'2032-02-28',totalMinutes:0,entryCount:1});
+  assert.equal(g.daysRemaining,2);assert.equal(g.dailyMinutesNeeded,1500);
+  assert.equal(C.regularMonthlyGoal({...goalInput,month:'2032-02',today:'2032-02-29'}).daysRemaining,1);
+});
+test('Mês encerrado mostra falta registrada e não exige ritmo diário impossível',()=>{
+  const g=C.regularMonthlyGoal({...goalInput,today:'2032-05-01'});
+  assert.equal(g.closed,true);assert.equal(g.status,'closed_short');assert.equal(g.daysRemaining,0);
+  assert.equal(g.remainingMinutes,2680);assert.equal(g.dailyMinutesNeeded,null);
+});
+test('Mês encerrado sem diário mantém progresso desconhecido em vez de inventar falta',()=>{
+  const g=C.regularMonthlyGoal({...goalInput,today:'2032-05-01',totalMinutes:0,entryCount:0});
+  assert.equal(g.status,'no_entries');assert.equal(g.targetMinutes,3000);assert.equal(g.recordedMinutes,0);
+  for(const key of ['remainingMinutes','percentage','barPercentage','dailyMinutesNeeded'])assert.equal(g[key],null);
+});
+test('Zero explícito em mês encerrado é distinto de ausência de lançamentos',()=>{
+  const g=C.regularMonthlyGoal({...goalInput,today:'2032-05-01',totalMinutes:0,entryCount:1});
+  assert.equal(g.status,'closed_short');assert.equal(g.remainingMinutes,3000);assert.equal(g.percentage,0);
+});
+test('Mês corrente vazio permite planejar sem tratar lançamento ausente como entregue',()=>{
+  const g=C.regularMonthlyGoal({...goalInput,totalMinutes:0,entryCount:0,today:'2032-04-01'});
+  assert.equal(g.status,'in_progress');assert.equal(g.recordedMinutes,0);assert.equal(g.daysRemaining,30);
+  assert.equal(g.dailyMinutesNeeded,100);
+});
+test('Meta atingida zera a falta e o ritmo necessário',()=>{
+  const g=C.regularMonthlyGoal({...goalInput,totalMinutes:3000});
+  assert.equal(g.status,'achieved');assert.equal(g.remainingMinutes,0);assert.equal(g.excessMinutes,0);
+  assert.equal(g.dailyMinutesNeeded,0);assert.equal(g.percentage,100);assert.equal(g.barPercentage,100);
+});
+test('Horas excedentes são preservadas e a barra limita em cem por cento',()=>{
+  const g=C.regularMonthlyGoal({...goalInput,totalMinutes:3135});
+  assert.equal(g.status,'achieved');assert.equal(g.recordedMinutes,3135);assert.equal(g.excessMinutes,135);
+  assert.equal(g.percentage,104.5);assert.equal(g.barPercentage,100);assert.equal(g.remainingMinutes,0);
+});
+test('Meta é exclusiva de pioneiro regular, sem atribuir 50 horas ao auxiliar',()=>{
+  for(const kind of ['auxiliary','publisher',undefined])assert.equal(C.regularMonthlyGoal({...goalInput,kind}),null);
+});
+test('Meta rejeita calendários inválidos, anos fora do suporte e meses futuros',()=>{
+  for(const patch of [{today:'2031-02-29'},{today:'1900-02-29'},{today:'2032-04-31'},
+    {today:'2032-4-08'},{today:'2200-01-01'},{month:'1899-12'},{month:'2032-13'},
+    {month:'2032-05'},{month:null},{today:null}])assert.throws(()=>C.regularMonthlyGoal({...goalInput,...patch}),/meta mensal/);
+  assert.equal(C.regularMonthlyGoal({...goalInput,month:'2000-02',today:'2000-02-29'}).daysRemaining,1);
+});
+test('Meta rejeita totais e contagens incoerentes ou fora da capacidade do calendário',()=>{
+  for(const patch of [{totalMinutes:-1},{totalMinutes:NaN},{totalMinutes:Infinity},{totalMinutes:1.5},
+    {totalMinutes:'320'},{entryCount:0},{entryCount:-1},{entryCount:1.2},{entryCount:31},
+    {totalMinutes:1441,entryCount:1},{month:'2032-02',today:'2032-02-29',entryCount:30}]){
+    assert.throws(()=>C.regularMonthlyGoal({...goalInput,...patch}),/meta mensal/);
+  }
+});
 test('Sem relatório é pendente',()=>assert.equal(C.status(null),'pending'));
 test('Recebimento incompleto',()=>assert.equal(C.status({...record(),participated:null,studies:null}),'review'));
 test('Não participou é relatório completo',()=>assert.equal(C.status({...record(),participated:false}),'complete'));
