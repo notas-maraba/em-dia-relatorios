@@ -7,6 +7,7 @@ const C = require('../assets/core.js');
 const PDF = require('../assets/pdf.js');
 const errors = require('../assets/cloud.js');
 const appCode = fs.readFileSync(require.resolve('../assets/app.js'), 'utf8');
+const PROFILE_AVATAR='data:image/jpeg;base64,/9j/2Q==',PROFILE_AVATAR_B='data:image/jpeg;base64,/9j/Af/Z';
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return {promise,resolve,reject}; };
 const flush = () => new Promise(resolve => setImmediate(() => setImmediate(resolve)));
 const testToday=()=>new Intl.DateTimeFormat('sv-SE',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
@@ -16,15 +17,17 @@ function fixture() {
   return state;
 }
 function harness(overrides={},options={}) {
-  const elements = new Map(), docEvents = new Map(), winEvents = new Map(), downloads = [],notifications=[],intervals=new Map();let intervalId=0,clock=options.now??Date.now(),offlineAdapter=null;
+  const elements = new Map(), docEvents = new Map(), winEvents = new Map(), downloads = [],notifications=[],intervals=new Map(),submittedForms=[];let intervalId=0,clock=options.now??Date.now(),offlineAdapter=null,accountAdapter=null;
   function element(selector='') {
     if (elements.has(selector)) return elements.get(selector);
-    const el={innerHTML:'',textContent:'',style:{},dataset:{},disabled:false,open:false,hidden:false,isConnected:true,value:'',
+    const classes=new Set(),passwordIds=['#account-current-password','#account-new-password','#account-confirm-password'];
+    const el={innerHTML:'',textContent:'',style:{},dataset:{},disabled:false,open:false,hidden:false,isConnected:true,value:'',id:selector.startsWith('#')?selector.slice(1):'',type:passwordIds.includes(selector)?'password':'',
+      classList:{toggle(name,value){if(value)classes.add(name);else classes.delete(name);},contains(name){return classes.has(name);}},
       append(child){if(selector==='#toasts')notifications.push(child.textContent);},remove(){},focus(){},select(){},click(){},scrollIntoView(){},checkValidity(){return true;},
       showModal(){this.open=true;},close(){this.open=false;},addEventListener(name,fn){this[name]=fn;}};
     elements.set(selector,el); return el;
   }
-  const document={querySelector:element,querySelectorAll:()=>[],activeElement:element('active'),visibilityState:'visible',
+  const document={querySelector:element,querySelectorAll:selector=>selector.startsWith('#modal input[type="password"]')?[...elements.entries()].filter(([key,value])=>key.startsWith('#account-')&&(value.type==='password'||key==='#account-password-nonce')&&element('#modal').innerHTML.includes('id="'+value.id+'"')).map(([,value])=>value):[],activeElement:element('active'),visibilityState:'visible',
     body:{style:{},append(){},classList:{toggle(){}}},createElement:()=>element('new-'+elements.size),
     addEventListener(name,fn){docEvents.set(name,fn);}};
   let currentSession={user:{id:'owner'}}, authCallback, saveCalls=0,confirmResult=true,launchCounter=0;
@@ -39,20 +42,23 @@ function harness(overrides={},options={}) {
     supabase:{createClient:()=>({})},EmDiaCloud:{...errors,create:()=>cloud},
     crypto:{randomUUID:()=>freshLaunchId(++launchCounter)},scrollTo(){},addEventListener(name,fn){winEvents.set(name,fn);}};
   if(options.offlineFactory)window.EmDiaOffline={create(args){offlineAdapter=options.offlineFactory(args);return offlineAdapter;}};
+  if(options.accountFactory)window.EmDiaAccount={create(args){accountAdapter=options.accountFactory(args);return accountAdapter;},prepareAvatar:options.prepareAvatar||(async()=>PROFILE_AVATAR)};
+  if(options.theme)window.EmDiaTheme=options.theme;
   window.indexedDB=options.indexedDB;
   const TestURL=class extends URL {static createObjectURL(blob){downloads.push(blob);return 'blob:fixture';}static revokeObjectURL(){}};
   const ClockDate=class extends Date {constructor(...args){super(...(args.length?args:[clock]));}static now(){return clock;}};
   const context={window,document,console,URL:TestURL,Blob,Date:options.now===undefined?Date:ClockDate,Number,String,Object,Array,Error,Promise,
     navigator:options.online===undefined?{}:{onLine:options.online},confirm:()=>confirmResult,setTimeout:()=>1,
     setInterval(fn){intervals.set(++intervalId,fn);return intervalId;},clearInterval(id){intervals.delete(id);},
-    FormData:class {constructor(form){this.values=new Map(Object.entries(form.fields||{}));}get(k){return this.values.get(k)||null;}has(k){return this.values.has(k);}},
+    FormData:class {constructor(form){this.values=new Map(Object.entries(form.fields||{}));submittedForms.push(this);}get(k){return this.values.get(k)||null;}has(k){return this.values.has(k);}delete(k){this.values.delete(k);}},
     localStorage:options.storage||new Proxy({}, {get(){throw Error('Application attempted to access local records');}})};
   vm.runInNewContext(appCode,context,{filename:'assets/app.js'});
   function click(action,id='') {docEvents.get('click')({target:{closest:()=>({dataset:{action,id}})},preventDefault(){}});}
   function submit(id,fields={},value='') {return docEvents.get('submit')({target:{id,fields},submitter:{value},preventDefault(){}});}
   function change(id,value){const target=element('#'+id);target.id=id;target.value=value;return docEvents.get('change')({target});}
+  function fileChange(file){const target=element('#account-photo');target.id='account-photo';target.files=file?[file]:[];target.value=file?'selected-photo':'';return docEvents.get('change')({target});}
   function input(form='#modal-form') {docEvents.get('input')({target:{id:'person-name',closest:s=>s===form}});}
-  return {window,cloud,elements,element,click,submit,input,change,downloads,notifications,navigator:context.navigator,offline:()=>offlineAdapter,confirm(value){confirmResult=value;},saveCalls:()=>saveCalls,
+  return {window,cloud,elements,element,click,submit,input,change,fileChange,downloads,notifications,submittedForms,navigator:context.navigator,offline:()=>offlineAdapter,account:()=>accountAdapter,confirm(value){confirmResult=value;},saveCalls:()=>saveCalls,
     auth(event,session){currentSession=session;authCallback(event,session);},
     focus(){winEvents.get('focus')();},visibility(value='visible'){document.visibilityState=value;docEvents.get('visibilitychange')?.();},
     advance(ms){clock+=ms;for(const tick of intervals.values())tick();},intervalCount:()=>intervals.size,
@@ -71,6 +77,14 @@ function offlineBoundary(args,options={}){
   adapter.test={args,status,calls,emit};return adapter;
 }
 function testWebCrypto(t){const descriptor=Object.getOwnPropertyDescriptor(globalThis,'crypto');if(!globalThis.crypto?.randomUUID){Object.defineProperty(globalThis,'crypto',{value:require('node:crypto').webcrypto,configurable:true});t.after(()=>{if(descriptor)Object.defineProperty(globalThis,'crypto',descriptor);else delete globalThis.crypto;});}}
+function accountFixture(userId='owner',fields={}){return{userId,displayName:'Pessoa do Perfil',avatarData:PROFILE_AVATAR,version:2,updatedAt:null,...fields};}
+function accountBoundary(args,overrides={}){
+  let data=accountFixture();const calls={getCached:[],load:[],save:[],changePassword:[],requestPasswordNonce:[],clearMemory:[],forget:[]};
+  const defaults={getCached:async()=>C.clone(data),load:async()=>C.clone(data),save:async input=>{data={userId:input.expectedUserId,displayName:input.displayName,avatarData:input.avatarData,version:input.expectedVersion+1,updatedAt:null};return C.clone(data);},changePassword:async()=>({changed:true}),requestPasswordNonce:async()=>({sent:true}),clearMemory(){},forget:async()=>{}};
+  const api={};for(const key of Object.keys(defaults)){api[key]=(...values)=>{calls[key].push(values.map(value=>value&&typeof value==='object'?C.clone(value):value));return(overrides[key]||defaults[key])(...values);};}
+  api.test={args,calls,setProfile(value){data=C.clone(value);}};return api;
+}
+function themeMock(){let current='light';const listeners=new Set(),api={current:()=>current,toggle(){current=current==='light'?'dark':'light';for(const fn of listeners)fn(current);return current;},subscribe(fn){listeners.add(fn);fn(current);return()=>listeners.delete(fn);}};return api;}
 test('records remain hidden until session verification and cloud read both finish',async()=>{
   const verification=deferred(),read=deferred();let readCalls=0;
   const h=harness({session:()=>verification.promise,read:()=>{readCalls++;return read.promise;}});
@@ -1461,4 +1475,139 @@ test('real offline engine preserves a saved launch and queued report through an 
   reopened.click('own-send');await flush();reopened.click('own-send-normal','diary');await reopened.submit('modal-form',{studies:'1'});await until(()=>reopened.offline().getSyncStatus().pending===2&&reopened.element('#app').innerHTML.includes('ainda não foi entregue'));
   assert.equal(C.getReport(reopened.window.EmDiaApp.getState(),'p_fixture',month),null);const annual=await reopened.offline().readOwnAnnual(year),row=annual.months.find(item=>item.month===month);assert.equal(row.source,'diary');assert.equal(row.minutes,65);assert.equal(serverWrites,0);
   reopened.click('sign-out');await until(()=>reopened.element('#modal').innerHTML.includes('Baixar cópia privada'));assert.ok(reopened.window.EmDiaApp.getState());assert.equal(logouts,0);assert.equal(reopened.offline().getSyncStatus().pending,2);const copy=await reopened.offline().exportPending();assert.doesNotMatch(JSON.stringify(copy),/fixture-identity-only|access_token/);
+});
+
+
+/* Account UI cases use only fictitious metadata, photos and credentials. */
+test('all three access roles share the profile, theme, logout and synchronization header',async()=>{
+  for(const role of ['admin','superintendent','publisher']){
+    const profile={userId:'owner',role,isAdmin:role==='admin',defaultGroupId:'group_a',publisherId:role==='publisher'?'p_fixture':null};
+    const h=harness({profile:async()=>profile,readOwnCard:async()=>ownBundle()},{theme:themeMock(),offlineFactory:args=>offlineBoundary(args),accountFactory:args=>accountBoundary(args)});await flush();await flush();
+    const label={admin:'Administrador',superintendent:'Superintendente',publisher:'Publicador'}[role];
+    assert.match(h.element('#account-brand').innerHTML,/Pessoa do Perfil/);assert.match(h.element('#account-brand').innerHTML,new RegExp(label));assert.match(h.element('#account-brand').innerHTML,/data-action="account-profile"/);assert.match(h.element('#account-brand').innerHTML,/data:image\/jpeg;base64/);assert.ok(h.element('#account-brand').classList.contains('profile-brand'));
+    for(const action of ['sync-details','theme-toggle','sign-out'])assert.match(h.element('#cloud-account').innerHTML,new RegExp('data-action="'+action+'"'));
+    assert.match(h.element('#cloud-account').innerHTML,/aria-label="Ativar modo escuro"/);assert.match(h.element('#cloud-account').innerHTML,/aria-label="Sair da conta"/);
+    h.click('account-profile');await flush();assert.match(h.element('#modal').innerHTML,/Meu perfil|Nome de exibição|Alterar senha/);assert.match(h.element('#modal').innerHTML,new RegExp(label));
+  }
+});
+
+test('an unrelated cached profile cannot supply the name or photo before an authorized account read',async()=>{
+  const pending=deferred();const h=harness({},{accountFactory:args=>accountBoundary(args,{getCached:async()=>accountFixture('different-owner',{displayName:'Outro perfil privado',avatarData:PROFILE_AVATAR_B}),load:()=>pending.promise})});await flush();
+  assert.doesNotMatch(h.element('#account-brand').innerHTML,/Outro perfil privado|\/9j\/Af\/Z/);assert.match(h.element('#account-brand').innerHTML,/Minha conta/);
+  pending.resolve(accountFixture('owner',{displayName:'Perfil autorizado'}));await flush();assert.match(h.element('#account-brand').innerHTML,/Perfil autorizado/);
+});
+
+test('profile edits wait for server confirmation and preserve the group records',async()=>{
+  const pending=deferred();const h=harness({},{accountFactory:args=>accountBoundary(args,{save:()=>pending.promise})});await flush();await flush();const records=C.clone(h.window.EmDiaApp.getState());h.click('account-profile');await flush();h.element('#account-display-name').value='Novo Nome do Perfil';h.input();
+  const saving=h.submit('modal-form',{displayName:'  Novo   Nome do Perfil  '});await flush();assert.equal(h.element('#modal').open,true);assert.match(h.element('#account-brand').innerHTML,/Pessoa do Perfil/);assert.doesNotMatch(h.element('#account-brand').innerHTML,/Novo Nome/);
+  assert.deepEqual(h.account().test.calls.save[0][0],{displayName:'Novo Nome do Perfil',avatarData:PROFILE_AVATAR,expectedVersion:2,expectedUserId:'owner'});
+  pending.resolve(accountFixture('owner',{displayName:'Novo Nome do Perfil',version:3}));await saving;await flush();assert.equal(h.element('#modal').open,false);assert.match(h.element('#account-brand').innerHTML,/Novo Nome do Perfil/);assert.equal(h.saveCalls(),0);assert.deepEqual(h.window.EmDiaApp.getState(),records);
+});
+
+test('a profile conflict retains the draft and never changes the displayed confirmed name',async()=>{
+  const h=harness({},{accountFactory:args=>accountBoundary(args,{save:async()=>{throw new errors.ConflictError();}})});await flush();await flush();h.click('account-profile');await flush();h.element('#account-display-name').value='Rascunho de perfil';h.input();await h.submit('modal-form',{displayName:'Rascunho de perfil'});await flush();
+  assert.equal(h.element('#modal').open,true);assert.equal(h.element('#account-display-name').value,'Rascunho de perfil');assert.match(h.element('#account-brand').innerHTML,/Pessoa do Perfil/);assert.doesNotMatch(h.element('#account-brand').innerHTML,/Rascunho de perfil/);assert.match(h.element('#form-error').textContent,/atualizada|outro aparelho|Recarregue/);assert.equal(h.account().test.calls.save.length,1);assert.equal(h.saveCalls(),0);
+});
+
+test('an old account profile response cannot replace the header after changing accounts',async()=>{
+  const oldRead=deferred();let reads=0;const h=harness({},{accountFactory:args=>accountBoundary(args,{getCached:async()=>null,load:({expectedUserId})=>++reads===1?oldRead.promise:Promise.resolve(accountFixture(expectedUserId,{displayName:'Perfil da Nova Conta',avatarData:PROFILE_AVATAR_B}))})});await flush();h.auth('SIGNED_IN',{user:{id:'new-owner'}});await flush();await flush();assert.match(h.element('#account-brand').innerHTML,/Perfil da Nova Conta/);
+  oldRead.resolve(accountFixture('owner',{displayName:'Perfil Privado Antigo'}));await flush();assert.match(h.element('#account-brand').innerHTML,/Perfil da Nova Conta/);assert.doesNotMatch(h.element('#account-brand').innerHTML,/Perfil Privado Antigo/);assert.ok(h.account().test.calls.clearMemory.length>=1);
+});
+
+test('pending logout preserves the profile cache and safe logout forgets only the current account',async()=>{
+  let adapter;const h=harness({},{offlineFactory:args=>{adapter=offlineBoundary(args,{status:{pending:1}});return adapter;},accountFactory:args=>accountBoundary(args)});await flush();await flush();h.click('sign-out');await flush();assert.equal(h.account().test.calls.forget.length,0);assert.equal(adapter.test.calls.logout,0);assert.ok(h.window.EmDiaApp.getState());
+  h.click('modal-close');adapter.test.emit({pending:0});await flush();h.click('sign-out');await flush();assert.deepEqual(h.account().test.calls.forget,[['owner']]);assert.equal(adapter.test.calls.logout,1);assert.equal(h.window.EmDiaApp.getState(),null);assert.doesNotMatch(h.element('#account-brand').innerHTML,/Pessoa do Perfil|data:image/);
+});
+
+test('theme changes preserve a dirty profile form for every access role',async()=>{
+  for(const role of ['admin','superintendent','publisher']){
+    const theme=themeMock(),profile={userId:'owner',role,isAdmin:role==='admin',defaultGroupId:'group_a',publisherId:role==='publisher'?'p_fixture':null};
+    const h=harness({profile:async()=>profile,readOwnCard:async()=>ownBundle()},{theme,accountFactory:args=>accountBoundary(args)});await flush();await flush();h.click('account-profile');await flush();h.element('#account-display-name').value='Rascunho protegido';h.input();const content=h.element('#modal').innerHTML;
+    h.click('theme-toggle');assert.equal(theme.current(),'dark');assert.match(h.element('#cloud-account').innerHTML,/Ativar modo claro/);assert.equal(h.element('#modal').innerHTML,content);assert.equal(h.element('#account-display-name').value,'Rascunho protegido');assert.equal(h.unload().prevented,true);assert.equal(h.account().test.calls.save.length,0);
+    h.click('theme-toggle');assert.equal(theme.current(),'light');assert.match(h.element('#cloud-account').innerHTML,/Ativar modo escuro/);assert.equal(h.element('#modal').open,true);
+  }
+});
+
+test('a later photo selection wins over a slower earlier decoder',async()=>{
+  const first=deferred(),second=deferred();const h=harness({},{accountFactory:args=>accountBoundary(args),prepareAvatar:file=>file.id==='first'?first.promise:second.promise});await flush();await flush();h.click('account-profile');await flush();
+  const one=h.fileChange({id:'first'}),two=h.fileChange({id:'second'});second.resolve(PROFILE_AVATAR_B);await two;const selected=h.element('#account-photo-preview').innerHTML;assert.match(selected,/\/9j\/Af\/Z/);first.resolve(PROFILE_AVATAR);await one;assert.equal(h.element('#account-photo-preview').innerHTML,selected);
+  await h.submit('modal-form',{displayName:'Pessoa do Perfil'});assert.equal(h.account().test.calls.save[0][0].avatarData,PROFILE_AVATAR_B);
+});
+
+test('an earlier photo decoder cannot release the save lock while the current selection is preparing',async()=>{
+  const first=deferred(),second=deferred();const h=harness({},{accountFactory:args=>accountBoundary(args),prepareAvatar:file=>file.id==='first'?first.promise:second.promise});await flush();await flush();h.click('account-profile');await flush();
+  const one=h.fileChange({id:'first'}),two=h.fileChange({id:'second'});first.resolve(PROFILE_AVATAR);await one;await h.submit('modal-form',{displayName:'Pessoa do Perfil'});assert.equal(h.account().test.calls.save.length,0);assert.match(h.element('#form-error').textContent,/Aguarde a preparação/);
+  second.resolve(PROFILE_AVATAR_B);await two;await h.submit('modal-form',{displayName:'Pessoa do Perfil'});assert.equal(h.account().test.calls.save.length,1);assert.equal(h.account().test.calls.save[0][0].avatarData,PROFILE_AVATAR_B);
+});
+
+test('removing a photo invalidates an unfinished preparation instead of restoring it later',async()=>{
+  const pending=deferred();const h=harness({},{accountFactory:args=>accountBoundary(args),prepareAvatar:()=>pending.promise});await flush();await flush();h.click('account-profile');await flush();const preparing=h.fileChange({id:'first'});h.click('account-photo-remove');const empty=h.element('#account-photo-preview').innerHTML;assert.doesNotMatch(empty,/<img/);
+  pending.resolve(PROFILE_AVATAR_B);await preparing;assert.equal(h.element('#account-photo-preview').innerHTML,empty);await h.submit('modal-form',{displayName:'Pessoa do Perfil'});assert.equal(h.account().test.calls.save[0][0].avatarData,null);
+});
+
+test('closing or changing accounts during photo decoding cannot restore the old photo modal',async()=>{
+  const pending=deferred();const h=harness({},{accountFactory:args=>accountBoundary(args),prepareAvatar:()=>pending.promise});await flush();await flush();h.click('account-profile');await flush();const preparing=h.fileChange({id:'first'});h.auth('SIGNED_OUT',null);pending.resolve(PROFILE_AVATAR_B);await preparing;await flush();assert.equal(h.element('#modal').innerHTML,'');assert.equal(h.element('#modal').open,false);assert.doesNotMatch(h.element('#account-brand').innerHTML,/data:image|Pessoa do Perfil/);
+});
+
+const PASSWORD_FIXTURE={currentPassword:'Fixture-current-92!',password:'Fixture-new-63!',confirmPassword:'Fixture-new-63!',nonce:''};
+function fillPasswordFixture(h,fields=PASSWORD_FIXTURE){for(const [id,key] of [['#account-current-password','currentPassword'],['#account-new-password','password'],['#account-confirm-password','confirmPassword'],['#account-password-nonce','nonce']])h.element(id).value=fields[key]||'';}
+function assertPasswordsCleared(h){for(const id of ['#account-current-password','#account-new-password','#account-confirm-password','#account-password-nonce'])assert.equal(h.element(id).value,'');}
+
+test('password validation prevents mismatched, short or unchanged credentials and clears entered fields',async()=>{
+  const h=harness({},{accountFactory:args=>accountBoundary(args)});await flush();await flush();h.click('account-password');assert.match(h.element('#modal').innerHTML,/Senha atual|Nova senha|Confirmar nova senha/);assert.match(h.element('#modal').innerHTML,/autocomplete="new-password"/);
+  for(const fields of [{...PASSWORD_FIXTURE,password:'short',confirmPassword:'short'},{...PASSWORD_FIXTURE,confirmPassword:'Different-fixture-87!'},{...PASSWORD_FIXTURE,password:PASSWORD_FIXTURE.currentPassword,confirmPassword:PASSWORD_FIXTURE.currentPassword}]){
+    fillPasswordFixture(h,fields);await h.submit('modal-form',fields);assert.equal(h.account().test.calls.changePassword.length,0);assertPasswordsCleared(h);assert.equal(h.submittedForms.at(-1).values.size,0);assert.equal(h.element('#modal').open,true);
+  }
+});
+
+test('password updates are explicit, wait for confirmation and erase the credential DOM after success',async()=>{
+  const pending=deferred(),writes=[];const h=harness({},{storage:{getItem:()=>null,setItem:(...args)=>writes.push(args)},accountFactory:args=>accountBoundary(args,{changePassword:()=>pending.promise})});await flush();await flush();h.click('account-password');fillPasswordFixture(h);h.input();const submitting=h.submit('modal-form',PASSWORD_FIXTURE);await flush();assert.equal(h.element('#modal').open,true);assert.equal(h.account().test.calls.changePassword.length,1);assert.equal(h.account().test.calls.requestPasswordNonce.length,0);
+  assert.deepEqual(h.account().test.calls.changePassword[0][0],{currentPassword:PASSWORD_FIXTURE.currentPassword,password:PASSWORD_FIXTURE.password,expectedUserId:'owner'});pending.resolve({changed:true});await submitting;assert.equal(h.element('#modal').open,false);assert.equal(h.element('#modal').innerHTML,'');assertPasswordsCleared(h);assert.equal(h.submittedForms.at(-1).values.size,0);assert.deepEqual(writes,[]);assert.equal(h.saveCalls(),0);assert.match(h.notifications.at(-1),/Senha alterada/);
+});
+
+test('additional password confirmation requests a code only after the user chooses that action',async()=>{
+  const reauth=Error('Confirme esta alteração.');reauth.code='reauth_required';const h=harness({},{accountFactory:args=>accountBoundary(args,{changePassword:async input=>{if(!input.nonce)throw reauth;return{changed:true};}})});await flush();await flush();h.click('account-password');h.element('#account-password-code').hidden=true;fillPasswordFixture(h);await h.submit('modal-form',PASSWORD_FIXTURE);assert.equal(h.element('#account-password-code').hidden,false);assert.equal(h.account().test.calls.requestPasswordNonce.length,0);assertPasswordsCleared(h);
+  h.click('account-password-code');await flush();assert.equal(h.account().test.calls.requestPasswordNonce.length,1);assert.match(h.element('#account-code-status').textContent,/Código solicitado/);const fields={...PASSWORD_FIXTURE,nonce:'123456'};fillPasswordFixture(h,fields);await h.submit('modal-form',fields);assert.equal(h.account().test.calls.changePassword.length,2);assert.equal(h.element('#modal').open,false);assertPasswordsCleared(h);
+});
+
+test('a scoped current-password error keeps access and reports intact without retaining credentials',async()=>{
+  const denied=Error('Senha atual não confere.');denied.code='invalid_current_password';const h=harness({},{accountFactory:args=>accountBoundary(args,{changePassword:async()=>{throw denied;}})});await flush();await flush();h.click('account-password');fillPasswordFixture(h);await h.submit('modal-form',PASSWORD_FIXTURE);assert.ok(h.window.EmDiaApp.getState());assert.equal(h.element('#modal').open,true);assert.match(h.element('#form-error').textContent,/Senha atual/);assertPasswordsCleared(h);assert.equal(h.saveCalls(),0);
+});
+
+test('an old password response cannot erase a new account password draft or display its success',async()=>{
+  const pending=deferred();let changed=0;const h=harness({},{accountFactory:args=>accountBoundary(args,{getCached:async()=>null,load:async({expectedUserId})=>accountFixture(expectedUserId,{displayName:expectedUserId==='owner'?'Perfil anterior':'Novo perfil'}),changePassword:()=>++changed===1?pending.promise:Promise.resolve({changed:true})})});await flush();await flush();h.click('account-password');fillPasswordFixture(h);const submitting=h.submit('modal-form',PASSWORD_FIXTURE);await flush();h.auth('SIGNED_OUT',null);h.auth('SIGNED_IN',{user:{id:'new-owner'}});await flush();await flush();h.click('account-password');fillPasswordFixture(h,{...PASSWORD_FIXTURE,currentPassword:'New-account-draft-82!'});h.input();
+  pending.resolve({changed:true});await submitting;await flush();assert.equal(h.element('#modal').open,true);assert.equal(h.element('#account-current-password').value,'New-account-draft-82!');assert.doesNotMatch(h.notifications.join(' '),/Senha alterada/);assert.match(h.element('#account-brand').innerHTML,/Novo perfil/);
+});
+
+
+test('a confirmed profile save from an old account cannot replace a new account draft',async()=>{
+  const pending=deferred();const h=harness({},{accountFactory:args=>accountBoundary(args,{getCached:async()=>null,load:async({expectedUserId})=>accountFixture(expectedUserId,{displayName:expectedUserId==='owner'?'Perfil anterior':'Perfil atual'}),save:()=>pending.promise})});await flush();await flush();h.click('account-profile');await flush();const submitting=h.submit('modal-form',{displayName:'Gravação anterior'});await flush();h.auth('SIGNED_OUT',null);h.auth('SIGNED_IN',{user:{id:'new-owner'}});await flush();await flush();h.click('account-profile');await flush();h.element('#account-display-name').value='Rascunho da conta atual';h.input();
+  pending.resolve(accountFixture('owner',{displayName:'Gravação anterior',version:3}));await submitting;await flush();assert.match(h.element('#account-brand').innerHTML,/Perfil atual/);assert.doesNotMatch(h.element('#account-brand').innerHTML,/Gravação anterior/);assert.equal(h.element('#account-display-name').value,'Rascunho da conta atual');assert.equal(h.element('#modal').open,true);assert.doesNotMatch(h.notifications.join(' '),/Perfil atualizado/);
+});
+
+test('profile authorization denial clears private UI and seals domain cache without discarding queued operations',async()=>{
+  const pending=deferred(),invalidations=[];let reads=0,adapter;const h=harness({},{offlineFactory:args=>{adapter=offlineBoundary(args,{status:{pending:1},methods:{async invalidateAccess(value){invalidations.push(C.clone(value));adapter.test.emit({blocked:true,available:false,blockedReason:value.reason});}}});return adapter;},accountFactory:args=>accountBoundary(args,{load:async()=>++reads===1?accountFixture():pending.promise})});await flush();await flush();h.click('account-profile');await flush();pending.reject(new errors.AccessDeniedError());await flush();await flush();assert.equal(h.window.EmDiaApp.getState(),null);assert.doesNotMatch(h.element('#account-brand').innerHTML,/Pessoa do Perfil|data:image/);assert.equal(h.element('#modal').innerHTML,'');assert.deepEqual(invalidations,[{userId:'owner',reason:'access_denied'}]);assert.equal(adapter.test.status.pending,1);assert.equal(adapter.test.calls.discard,0);assert.equal(h.account().test.calls.forget.length,0);
+});
+
+test('confirmed profile revocation hides private UI even if persisting the domain seal fails',async()=>{
+  let deny=false,attempts=0;
+  const h=harness({},{offlineFactory:args=>offlineBoundary(args,{status:{pending:1},methods:{async invalidateAccess(){attempts++;const failure=Error('Storage fixture');failure.code='storage_error';throw failure;}}}),accountFactory:args=>accountBoundary(args,{load:async()=>{if(deny)throw new errors.AccessDeniedError();return accountFixture();}})});
+  await flush();await flush();assert.ok(h.window.EmDiaApp.getState());deny=true;h.click('account-profile');await flush();await flush();
+  assert.equal(attempts,1);assert.equal(h.window.EmDiaApp.getState(),null);assert.doesNotMatch(h.element('#app').innerHTML,/Pessoa de Teste/);assert.doesNotMatch(h.element('#account-brand').innerHTML,/Pessoa do Perfil|data:image/);assert.equal(h.element('#modal').innerHTML,'');assert.equal(h.offline().test.status.pending,1);assert.equal(h.offline().test.calls.discard,0);assert.equal(h.account().test.calls.forget.length,0);
+});
+
+test('a previously sealed account profile cannot be treated as an ordinary cache miss while offline',async()=>{
+  let cachedDenied=false;const invalidations=[];
+  const h=harness({},{offlineFactory:args=>offlineBoundary(args,{methods:{async invalidateAccess(value){invalidations.push(C.clone(value));}}}),accountFactory:args=>accountBoundary(args,{getCached:async()=>{if(cachedDenied)throw new errors.AccessDeniedError();return accountFixture();}})});
+  await flush();await flush();assert.ok(h.window.EmDiaApp.getState());h.network(false);cachedDenied=true;h.click('account-profile');await flush();await flush();
+  assert.equal(h.window.EmDiaApp.getState(),null);assert.doesNotMatch(h.element('#app').innerHTML,/Pessoa de Teste/);assert.doesNotMatch(h.element('#account-brand').innerHTML,/Pessoa do Perfil|data:image/);assert.deepEqual(invalidations,[{userId:'owner',reason:'access_denied'}]);
+});
+
+test('a late logout refusal leaves the private profile cache intact until logout is actually confirmed',async()=>{
+  for(const code of ['pending_changes','logout_failed','sync_busy']){
+    let logoutAttempts=0;
+    const h=harness({},{offlineFactory:args=>offlineBoundary(args,{methods:{async logoutSafe(){logoutAttempts++;const failure=Error('Late logout fixture');failure.code=code;throw failure;}}}),accountFactory:args=>accountBoundary(args)});
+    await flush();await flush();h.click('sign-out');await flush();await flush();
+    assert.equal(logoutAttempts,1);assert.equal(h.account().test.calls.forget.length,0);assert.ok(h.window.EmDiaApp.getState());assert.match(h.element('#account-brand').innerHTML,/Pessoa do Perfil/);
+  }
 });

@@ -2,6 +2,14 @@
 
 O código é público. Cadastros, relatórios, observações e backups não integram o repositório nem arquivos públicos de inicialização.
 
+A foto e o nome de exibição pertencem à conta. Apenas o titular autorizado pode lê-los ou alterá-los pelas funções próprias; nem mesmo um administrador recebe as fotos dos demais por essas funções. A tabela account_profiles fica em schema privado, com RLS e conferência de ator. Não há bucket público ou URL pública da foto. A cópia offline do perfil usa IndexedDB por conta, fora do cache de instalação, e é apagada após uma saída confirmada. Um marcador técnico sem nome ou foto impede uma resposta antiga de recriar a cópia após sair.
+
+O navegador transforma a imagem selecionada em JPEG quadrado, limitado, descartando o arquivo original e seus metadados. A prévia só é confirmada ao salvar. O nome de exibição não concede permissões nem muda o cartão de publicador.
+
+A alteração de senha usa a identidade autenticada fixa do formulário. Senha atual, nova senha e código não entram no banco do aplicativo, na fila offline, em backups, logs ou arquivos públicos. Não há tentativas automáticas de reenviar uma alteração de senha. Os campos são limpos ao concluir, falhar, cancelar ou trocar de conta. A solicitação de código por e-mail ocorre somente ao tocar no botão correspondente. As políticas de senha do servidor continuam valendo; a atualização não enfraquece configurações de Auth.
+
+O tema claro/escuro guarda somente uma preferência do aparelho, sem nomes, fotos ou credenciais.
+
 Supabase Auth verifica o login. Perfis e vínculos mantidos no banco determinam a autorização; metadados editáveis pelo usuário não concedem privilégios. Administradores gerenciam todos os grupos e usuários. Superintendentes administram somente seu grupo. Publicadores recebem apenas o próprio cartão e os próprios relatórios por uma função específica, sem observações internas nem a base completa do grupo. Visitantes e contas não autorizadas não recebem os registros. Não basta alterar um identificador no navegador para ampliar o acesso. O navegador não pode escrever diretamente nas tabelas nem atribuir a si mesmo outro perfil ou grupo.
 
 O primeiro envio de atividade do publicador é recebido automaticamente. Alterações posteriores aguardam decisão do responsável; a proposta não substitui o relatório recebido antes da aceitação. Envio, decisão e transferência conferem versões e permissões no banco. A transferência de cartão move seu histórico e seu vínculo de login juntos; o publicador passa a ver apenas esse cartão no grupo de destino.
