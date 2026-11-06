@@ -1,5 +1,15 @@
 # Verificação
 
+Na preparação da versão 5.0.0 passaram 446 testes Node: 74 de regras/PDF, 132 de nuvem, 35 de armazenamento/fila offline, 161 da interface, 33 da função de usuários e 11 de instalação/cache. A sintaxe e git diff --check também passaram. Os testes do aparelho usam relógios simulados e IndexedDB emulado; não representam um ensaio físico de suspensão ou modo avião em Android/iOS.
+
+Na versão 5, tests/offline.test.cjs usa IndexedDB emulado com transações reais da API para verificar persistência após reabrir, fila antes da rede, falha de armazenamento, isolamento de conta e vínculo, resposta perdida, versões dependentes e operações que não incrementam versão. Também cobre duas abas, conflitos sem substituição automática, calendário e duração do cronômetro durante a desconexão. A integração da interface usa o wrapper real e dados fictícios para conferir lançamento, reabertura, envio ainda não entregue e bloqueio de saída com pendências.
+
+As suítes SQL offline-receipts-security.sql, offline-timer-security.sql e offline-snapshot-security.sql usam transações com rollback. Elas conferem os perfis, autorização antes de replay, hash do payload, recibos mínimos, CAS, duração pelos horários do evento, separação dos diários e bootstrap completo autorizado. Nenhuma delas deve deixar contas, grupos, lançamentos ou recibos fictícios no banco.
+
+offline-strict-versions-security.sql confere que uma operação nova exige a versão exata mesmo quando o valor remoto já é igual e a rotina histórica permitiria um noop. Uma confirmação da própria fila pode alimentar a próxima operação; uma edição externa não pode avançar essa versão silenciosamente. O replay de um recibo confirmado continua reconhecido antes dessa comparação.
+
+No celular, após atualizar, abra uma vez com internet e aguarde a preparação dos dados. Depois teste modo avião, salvar um lançamento fictício apenas em uma conta de teste, fechar e reabrir e voltar à conexão com o aplicativo aberto. Confira a redução das pendências e a leitura em outro aparelho. A automação de módulos não substitui esse teste físico de navegador, armazenamento e modo avião. A sincronização com o aplicativo fechado não é prometida.
+
 Na versão 4.5.2, o cartão deixa de renderizar os botões de envio duplicados para os três tipos de publicador. O aviãozinho central continua oferecendo total do diário, total manual, reenvio e preparação do WhatsApp conforme o mês e a condição. Confira a ausência das ações duplicadas na página e a permanência dos botões de confirmação nos formulários. A mudança é somente de interface: sem alteração de banco, autenticação ou regras de aprovação.
 
 Na preparação desta versão, os 390 testes Node e a sintaxe passaram. O cenário existente de publicador comum, pioneiro regular e auxiliar confere a ausência das duas ações duplicadas na página e o aviãozinho único na navegação. Os testes do menu central continuam verificando a conferência e os envios com controle de versão. Não foram enviados relatórios reais para testar.
