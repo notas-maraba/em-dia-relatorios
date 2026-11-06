@@ -260,14 +260,15 @@
   }
 
   function activityInput(value) {
-    if (!stateObject(value) || Object.keys(value).some(key => !['participated', 'hours', 'studies'].includes(key)) ||
+    if (!stateObject(value) || Object.keys(value).some(key => !['participated', 'hours', 'studies', 'kind'].includes(key)) ||
         !['participated', 'hours', 'studies'].every(key => Object.hasOwn(value, key)) ||
         !(value.participated === null || typeof value.participated === 'boolean') ||
         !(value.hours === null || typeof value.hours === 'number' && Number.isFinite(value.hours) && value.hours >= 0 && value.hours <= 744 && Math.abs(value.hours * 100 - Math.round(value.hours * 100)) < 1e-7) ||
         !(value.studies === null || Number.isSafeInteger(value.studies) && value.studies >= 0 && value.studies <= 9999)) {
       throw new CloudError('Confira a participação, as horas e os estudos informados.', 'invalid_report');
     }
-    return {participated: value.participated, hours: value.hours, studies: value.studies};
+    if(Object.hasOwn(value,'kind')&&!['publisher','regular','auxiliary'].includes(value.kind))throw new CloudError('Confira a condição do mês.','invalid_report');
+    return {participated: value.participated, hours: value.hours, studies: value.studies,...(Object.hasOwn(value,'kind')?{kind:value.kind}:{})};
   }
 
   function activityResult(value) {
@@ -440,6 +441,20 @@
       } catch (error) { throw mappedError(error); }
     }
 
+    async function saveOwnCondition({month, kind, expectedRevision} = {}) {
+      const selectedMonth=checkedMonth(month), revision=checkedVersion(expectedRevision,1);
+      if(!['publisher','regular','auxiliary'].includes(kind))throw new CloudError('Escolha a condição deste mês.','invalid_condition');
+      try {
+        const current=await profile();if(!hasPersonalCard(current))throw new AccessDeniedError();
+        const response=await client.rpc('save_em_dia_own_condition',{p_month:selectedMonth,p_kind:kind,p_expected_revision:revision,
+          p_expected_actor_id:current.userId,p_expected_group_id:personalGroup(current),p_expected_person_id:current.publisherId});
+        if(response.error)throw response.error;const row=objectResult(response.data);
+        if(row.group_id!==personalGroup(current)||row.person_id!==current.publisherId||row.month!==selectedMonth||row.kind!==kind||typeof row.unchanged!=='boolean'||
+          !Number.isSafeInteger(row.revision)||(row.unchanged?row.revision!==revision:row.revision!==revision+1))throw new CloudError('Não foi possível confirmar a condição do mês. Recarregue seu cartão.','invalid_response');
+        return {groupId:row.group_id,personId:row.person_id,month:row.month,kind:row.kind,revision:row.revision,unchanged:row.unchanged};
+      } catch(error){throw mappedError(error,true);}
+    }
+
     async function submitOwnReport({month, report, expectedVersion} = {}) {
       const selectedMonth = checkedMonth(month), input = activityInput(report), version = checkedVersion(expectedVersion);
       try {
@@ -515,8 +530,9 @@
       } catch (error) { throw privateDiaryError(error, true); }
     }
 
-    async function submitOwnHours({month, participated, studies, expectedHoursVersion, expectedReportVersion} = {}) {
+    async function submitOwnHours({month, participated, studies, expectedHoursVersion, expectedReportVersion, expectedKind = null} = {}) {
       const selectedMonth = checkedMonth(month), hoursVersion = checkedVersion(expectedHoursVersion, 1), reportVersion = checkedVersion(expectedReportVersion);
+      if(expectedKind!==null&&!['publisher','regular','auxiliary'].includes(expectedKind))throw new CloudError('Confira a condição do mês.','invalid_report');
       if (!(participated === null || typeof participated === 'boolean') ||
           !(studies === null || Number.isSafeInteger(studies) && studies >= 0 && studies <= 9999)) {
         throw new CloudError('Confira a participação e os estudos informados.', 'invalid_report');
@@ -525,7 +541,7 @@
         const current = await profile();
         if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('submit_em_dia_own_hours', {p_month: selectedMonth, p_participated: participated,
-          p_studies: studies, p_expected_hours_version: hoursVersion, p_expected_report_version: reportVersion});
+          p_studies: studies, p_expected_hours_version: hoursVersion, p_expected_report_version: reportVersion, p_expected_kind:expectedKind});
         if (result.error) throw result.error;
         const row = objectResult(result.data), savedVersion = responseVersion(row.version), savedHoursVersion = responseVersion(row.hours_version, 1);
         if (!['accepted', 'pending'].includes(row.status) || row.group_id !== personalGroup(current) || row.person_id !== current.publisherId ||
@@ -613,16 +629,17 @@
       } catch (error) { throw privateDiaryError(error, true); }
     }
 
-    async function postOwnTimer({timerId, expectedTimerVersion, launchId, date, minutes, note = '', expectedHoursVersion} = {}) {
+    async function postOwnTimer({timerId, expectedTimerVersion, launchId, date, minutes, note = '', expectedHoursVersion, expectedKind = null} = {}) {
       const id = checkedLaunchId(timerId), itemId = checkedLaunchId(launchId), selectedDate = checkedDate(date),
         timerVersion = checkedVersion(expectedTimerVersion, 1), hoursVersion = checkedVersion(expectedHoursVersion), launchNote = note === null ? '' : note;
+      if(expectedKind!==null&&!['publisher','regular','auxiliary'].includes(expectedKind))throw new CloudError('Confira a condição do mês.','invalid_report');
       if (!Number.isSafeInteger(minutes) || minutes < 0 || minutes > MAX_DIARY_MINUTES) throw new CloudError('Informe de 0 a 744 horas para este lançamento.', 'invalid_minutes');
       if (typeof launchNote !== 'string' || launchNote.length > MAX_NOTE_LENGTH) throw new CloudError('Informe uma observação com até 1000 caracteres ou deixe em branco.', 'invalid_note');
       try {
         const current = await profile();
         if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('post_em_dia_own_timer', {p_timer_id: id, p_expected_timer_version: timerVersion,
-          p_launch_id: itemId, p_date: selectedDate, p_minutes: minutes, p_note: launchNote, p_expected_hours_version: hoursVersion});
+          p_launch_id: itemId, p_date: selectedDate, p_minutes: minutes, p_note: launchNote, p_expected_hours_version: hoursVersion, p_expected_kind:expectedKind});
         if (result.error) throw result.error;
         const row = objectResult(result.data), timer = ownTimerResult(row.timer, current),
           diary = ownHourLaunchesResult(row.diary, current, selectedDate.slice(0, 7)), receipt = row.receipt,
@@ -873,7 +890,7 @@
     }
 
     async function applyOfflineOperation({operationId, kind, payload} = {}) {
-      const id = checkedLaunchId(operationId), kinds = ['group_save','diary_launch','report_manual','report_diary','annual_goal','annual_retro','timer_change','timer_post'];
+      const id = checkedLaunchId(operationId), kinds = ['group_save','month_condition','diary_launch','report_manual','report_diary','annual_goal','annual_retro','timer_change','timer_post'];
       if (!kinds.includes(kind) || !stateObject(payload) || typeof payload.userId !== 'string') throw new CloudError('A operação offline é inválida.', 'invalid_operation');
       const input = copy(payload);
       try {
@@ -892,7 +909,7 @@
           if (!['accepted','pending'].includes(raw.status)) throw new CloudError('Confirmação offline inválida.', 'invalid_response');
           confirmation.status = raw.status;
         }
-        const required = {group_save:['revision'],diary_launch:['version'],report_manual:['version','revision','status'],report_diary:['version','revision','hoursVersion','status'],annual_goal:['version'],annual_retro:['version'],timer_change:['timerVersion'],timer_post:['timerVersion','hoursVersion']}[kind];
+        const required = {group_save:['revision'],month_condition:['revision'],diary_launch:['version'],report_manual:['version','revision','status'],report_diary:['version','revision','hoursVersion','status'],annual_goal:['version'],annual_retro:['version'],timer_change:['timerVersion'],timer_post:['timerVersion','hoursVersion']}[kind];
         if (required.some(key => !Object.hasOwn(confirmation, key))) throw new CloudError('Confirmação offline incompleta.', 'invalid_response');
         return {operationId: id, kind, replayed: row.replayed, confirmation};
       } catch (error) { throw privateDiaryError(error, true); }
@@ -927,7 +944,7 @@
       } catch (error) { throw privateDiaryError(error); }
     }
 
-    return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, submitOwnReport, readOwnHours, saveOwnHours, saveOwnHoursLaunch, submitOwnHours, readOwnAnnual, saveOwnAnnualGoal, saveOwnAnnualRetro, readOwnTimer, changeOwnTimer, postOwnTimer, listRevisions, reviewRevision, applyOfflineOperation, offlineSnapshot,
+    return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, saveOwnCondition, submitOwnReport, readOwnHours, saveOwnHours, saveOwnHoursLaunch, submitOwnHours, readOwnAnnual, saveOwnAnnualGoal, saveOwnAnnualRetro, readOwnTimer, changeOwnTimer, postOwnTimer, listRevisions, reviewRevision, applyOfflineOperation, offlineSnapshot,
       transferGroups, transferPublisher, publisherAccounts, listUsers, createUser, assignUser, createPublisherUser, listPersonalBindings, bindPersonalCard,
       login, loginPassword, logout, session, subscribeAuth});
   }
