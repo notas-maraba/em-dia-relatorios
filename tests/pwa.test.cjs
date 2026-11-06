@@ -59,6 +59,7 @@ test('new UI requests its matching core release even while an older shell worker
   assert.ok(scripts.indexOf(cloudPath) >= 0 && scripts.indexOf(cloudPath) < scripts.indexOf(offlinePath) && scripts.indexOf(offlinePath) < scripts.indexOf(accountPath) && scripts.indexOf(accountPath) < scripts.indexOf(appPath),
     'Private data and profile helpers must load before application startup');
   assert.ok(html.indexOf('assets/theme.js?v=' + VERSION) < html.indexOf('<link rel="stylesheet"'), 'Theme preference must be applied before the first stylesheet');
+  assert.ok(scripts.indexOf('assets/access.js?v=' + VERSION) >= 0 && scripts.indexOf('assets/access.js?v=' + VERSION) < scripts.indexOf(appPath), 'Session preferences must initialize before application startup');
   const corePath = html.match(/<script src="([^"]*core\.js[^"]*)"/)[1];
   assert.equal(corePath, 'assets/core.js?v=' + VERSION);
   const current = worker(); await current.lifecycle('install');
@@ -98,7 +99,7 @@ test('manifest resolves inside the GitHub Pages folder and uses real install ico
 
 test('service worker installation fetches only exact static public assets without credentials', async () => {
   const w = worker(); await w.lifecycle('install');
-  assert.equal(w.requests.length, 19); assert.equal(new Set(w.requests.map(r => r.url)).size, 19);
+  assert.equal(w.requests.length, 20); assert.equal(new Set(w.requests.map(r => r.url)).size, 20);
   assert.ok([...w.stores.keys()][0].endsWith(VERSION), 'The shell cache must use the package release');
   const manifest = JSON.parse(source('manifest.webmanifest')), html = source('index.html');
   const iconPaths = manifest.icons.map(icon => new URL(icon.src, SITE).href);

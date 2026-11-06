@@ -225,14 +225,14 @@ test('login com senha vazio falha antes da chamada ao SDK', async () => {
 
 test('perfil administrativo vem somente da RPC privada autorizada', async () => {
   const m = mock({isAdmin: true}), api = Cloud.create({client: m.client});
-  assert.deepEqual(await api.profile(), {userId: user.id, role: 'admin', isAdmin: true, defaultGroupId: group.id, publisherId: null});
+  assert.deepEqual(await api.profile(), {userId: user.id, role: 'admin', isAdmin: true, defaultGroupId: group.id, publisherId: null, personalGroupId: null});
   assert.deepEqual(m.calls, ['getSession', 'getUser', ['rpc', 'get_em_dia_access_profile', undefined]]);
 });
 
 test('grupo padrão consulta apenas o vínculo do usuário verificado, inclusive para administradores', async () => {
   for (const isAdmin of [false, true]) {
     const m = mock({isAdmin}), api = Cloud.create({client: m.client});
-    assert.deepEqual(await api.profile(), {userId: user.id, role: isAdmin ? 'admin' : 'superintendent', isAdmin, defaultGroupId: group.id, publisherId: null});
+    assert.deepEqual(await api.profile(), {userId: user.id, role: isAdmin ? 'admin' : 'superintendent', isAdmin, defaultGroupId: group.id, publisherId: null, personalGroupId: null});
     assert.deepEqual(m.calls.find(call => Array.isArray(call) && call[1] === 'get_em_dia_access_profile'), ['rpc', 'get_em_dia_access_profile', undefined]);
     assert(!m.calls.some(call => call.table === 'em_dia_states'));
   }
@@ -240,7 +240,7 @@ test('grupo padrão consulta apenas o vínculo do usuário verificado, inclusive
 
 test('conta sem vínculo recebe padrão nulo sem escolher outro grupo', async () => {
   const m = mock({membershipRow: null}), api = Cloud.create({client: m.client});
-  assert.deepEqual(await api.profile(), {userId: user.id, role: 'superintendent', isAdmin: false, defaultGroupId: null, publisherId: null});
+  assert.deepEqual(await api.profile(), {userId: user.id, role: 'superintendent', isAdmin: false, defaultGroupId: null, publisherId: null, personalGroupId: null});
   assert(!m.calls.some(call => call.table === 'em_dia_groups' || call.table === 'em_dia_states'));
 });
 
@@ -360,7 +360,7 @@ const operationCalls = calls => calls.filter(call => Array.isArray(call) && call
 
 test('perfil aceita somente papéis protegidos coerentes e vínculo de publicador completo', async () => {
   const m = mock({role: 'publisher'}), api = Cloud.create({client: m.client});
-  assert.deepEqual(await api.profile(), {userId: user.id, role: 'publisher', isAdmin: false, defaultGroupId: group.id, publisherId: 'p1'});
+  assert.deepEqual(await api.profile(), {userId: user.id, role: 'publisher', isAdmin: false, defaultGroupId: group.id, publisherId: 'p1', personalGroupId: group.id});
   for (const profileRow of [
     {user_id: user.id, role: 'admin', is_admin: false, group_id: group.id, publisher_id: null},
     {user_id: user.id, role: 'publisher', is_admin: false, group_id: group.id, publisher_id: null},
@@ -1387,4 +1387,36 @@ test('bootstrap e gateway não retêm erros brutos ou repetem uma gravação por
   for(const action of ['snapshot','apply']){const m=mock({role:'publisher',rpcThrow:Object.assign(Error('PRIVATE_OFFLINE_FIXTURE'),{code:'PRIVATE_OFFLINE_FIXTURE',request:{note:'PRIVATE_OFFLINE_FIXTURE'}})}),api=Cloud.create({client:m.client});
     await assert.rejects(action==='snapshot'?api.offlineSnapshot():api.applyOfflineOperation({operationId:launchId(1),kind:'annual_goal',payload:{userId:user.id,groupId:group.id,personId:'p1'}}),e=>e instanceof Cloud.CloudError&&!Object.hasOwn(e,'cause')&&!JSON.stringify(e).includes('PRIVATE_OFFLINE_FIXTURE')&&!e.message.includes('PRIVATE_OFFLINE_FIXTURE'));assert.equal(operationCalls(m.calls).length,1);
   }
+});
+
+const managerPersonalProfile = (role='superintendent',personal=otherGroupId) => ({user_id:user.id,role,is_admin:role==='admin',group_id:group.id,publisher_id:'p1',personal_group_id:personal});
+test('manager own card keeps management role and validates independent personal group',async()=>{
+  for(const role of ['admin','superintendent']){const card=ownCard();card.group_id=otherGroupId;const m=mock({profileRow:managerPersonalProfile(role),rpcResults:{read_em_dia_own_card:{data:card,error:null}}});const api=Cloud.create({client:m.client});
+    const p=await api.profile();assert.equal(p.role,role);assert.equal(p.defaultGroupId,group.id);assert.equal(p.personalGroupId,otherGroupId);assert.equal((await api.readOwnCard()).groupId,otherGroupId);assert(!m.calls.some(c=>c.table));
+  }
+});
+test('manager personal identity never accepts mismatched or incomplete own bindings',async()=>{
+  for(const profileRow of [{...managerPersonalProfile(),personal_group_id:null},{...managerPersonalProfile(),publisher_id:null}])await assert.rejects(Cloud.create({client:mock({profileRow}).client}).profile(),Cloud.AccessDeniedError);
+  const m=mock({profileRow:managerPersonalProfile(),rpcResults:{read_em_dia_own_card:{data:ownCard(),error:null}}});await assert.rejects(Cloud.create({client:m.client}).readOwnCard(),Cloud.CloudError);
+});
+test('only administrator lists personal bindings and assigns with exact expected card',async()=>{
+  const row={user_id:user.id,group_id:otherGroupId,person_id:'p1'}, m=mock({isAdmin:true,rpcResults:{list_em_dia_personal_bindings:{data:[row],error:null},bind_em_dia_personal_card:{data:row,error:null}}}), api=Cloud.create({client:m.client});
+  assert.deepEqual(await api.listPersonalBindings(),[{userId:user.id,groupId:otherGroupId,personId:'p1'}]);
+  assert.deepEqual(await api.bindPersonalCard({userId:user.id,groupId:otherGroupId,personId:'p1',expectedGroupId:null,expectedPersonId:null}),{userId:user.id,groupId:otherGroupId,personId:'p1'});
+  assert.deepEqual(operationCalls(m.calls).at(-1)[2],{p_user_id:user.id,p_group_id:otherGroupId,p_person_id:'p1',p_expected_group_id:null,p_expected_person_id:null,p_expected_actor_id:user.id});
+  const denied=mock(),other=Cloud.create({client:denied.client});await assert.rejects(other.listPersonalBindings(),Cloud.AccessDeniedError);await assert.rejects(other.bindPersonalCard({userId:user.id,groupId:null,personId:null,expectedGroupId:null,expectedPersonId:null}),Cloud.AccessDeniedError);assert.equal(operationCalls(denied.calls).length,0);
+});
+test('personal assignment does not retry conflicts or accept ambiguous target confirmation',async()=>{
+  const args={userId:user.id,groupId:otherGroupId,personId:'p1',expectedGroupId:null,expectedPersonId:null};
+  for(const response of [{data:null,error:{code:'40001'}},{data:{user_id:user.id,group_id:group.id,person_id:'p1'},error:null}]){const m=mock({isAdmin:true,rpcResults:{bind_em_dia_personal_card:response}});await assert.rejects(Cloud.create({client:m.client}).bindPersonalCard(args),Cloud.CloudError);assert.equal(operationCalls(m.calls).length,1);}
+});
+test('manager offline snapshot includes own sanitized card independently from authorized management groups',async()=>{
+  const profile=managerPersonalProfile(), card=ownCard();card.group_id=otherGroupId;
+  const raw=offlineWire({profile,own_card:card,diaries:[],annuals:[],timer:{...timerRow(),group_id:otherGroupId},states:[{group_id:group.id,state:null,revision:0,updated_at:null}],revisions:[{group_id:group.id,items:{revisions:[],total:0}}]});
+  const m=mock({profileRow:profile,rpcResults:{read_em_dia_offline_snapshot:{data:raw,error:null}}}),result=await Cloud.create({client:m.client}).offlineSnapshot();assert.equal(result.states[0].groupId,group.id);assert.equal(result.ownCard.groupId,otherGroupId);assert.equal(result.profile.role,'superintendent');assert.equal(result.groups.length,1);
+});
+test('manager personal queued mutation checks personal scope instead of currently managed group',async()=>{
+  const profile=managerPersonalProfile(), id=launchId(8), rpc={data:{operation_id:id,kind:'annual_goal',replayed:false,confirmation:{version:1}},error:null};
+  const m=mock({profileRow:profile,rpcResults:{apply_em_dia_offline_operation:rpc}}),api=Cloud.create({client:m.client});await api.applyOfflineOperation({operationId:id,kind:'annual_goal',payload:{userId:user.id,groupId:otherGroupId,personId:'p1'}});
+  await assert.rejects(api.applyOfflineOperation({operationId:id,kind:'annual_goal',payload:{userId:user.id,groupId:group.id,personId:'p1'}}),Cloud.AccessDeniedError);assert.equal(operationCalls(m.calls).length,1);
 });
