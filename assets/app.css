@@ -215,6 +215,26 @@
   .hours-timer-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
   .hours-timer-actions>.btn{min-height:44px;padding:8px 11px}
   .hours-timer .help{margin-bottom:0}
+  .annual-toolbar{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+  .annual-toolbar>.field{min-width:125px}
+  .annual-toolbar .field label{font-size:11px}
+  .annual-toolbar .field input{min-height:44px;padding:8px 10px}
+  .annual-summary{margin-top:10px}
+  .annual-summary .section-title{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+  .annual-summary .section-title h2{font-size:17px}
+  .annual-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:10px}
+  .annual-stats span{display:block;font-size:11px;color:var(--muted)}
+  .annual-stats strong{display:block;font-size:19px;color:var(--green);overflow-wrap:anywhere;line-height:1.2;margin-top:4px}
+  .annual-caption{margin:5px 0}
+  .annual-months{list-style:none;margin:0;padding:0}
+  .annual-month{display:flex;justify-content:space-between;align-items:center;gap:8px;border-top:1px solid var(--line);padding:9px 0}
+  .annual-month:first-child{border-top:0}
+  .annual-month-data{min-width:0;font-size:13px;overflow-wrap:anywhere}
+  .annual-month-data>span{display:block;font-size:11px}
+  .annual-month-values{display:flex;flex-wrap:wrap;gap:3px 10px;margin-top:4px;font-size:11px}
+  .annual-month>.btn{min-height:44px;flex-shrink:0;padding:8px;font-size:11px}
+  .mobile-nav .publisher-send{color:var(--green);font-weight:750}
+  .mobile-nav .publisher-send svg{width:24px;height:24px;background:var(--soft);box-shadow:0 0 0 5px var(--soft);border-radius:8px}
   .hours-entry input{font-size:16px;min-width:0}
   .hours-send-total>span{display:block;font-size:12px}
   .hours-send-total>strong{display:block;font-size:26px;margin-top:4px;color:var(--green)}

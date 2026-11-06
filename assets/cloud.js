@@ -209,6 +209,43 @@
     } catch (_) { throw new CloudError('A nuvem retornou um cronômetro inválido. Recarregue seu cartão.', 'invalid_response'); }
   }
 
+  function checkedServiceYear(value) {
+    if (!Number.isInteger(value) || value < 1900 || value > 2198) throw new CloudError('Escolha um ano de serviço válido.', 'invalid_service_year');
+    return value;
+  }
+
+  function serviceMonths(year) {
+    return Array.from({length: 12}, (_, i) => i < 4 ? year + '-' + String(i + 9).padStart(2, '0') : (year + 1) + '-' + String(i - 3).padStart(2, '0'));
+  }
+
+  function ownAnnualResult(row, current, serviceYear) {
+    try {
+      const today = checkedDate(row.today), now = today.slice(0, 7), currentYear = Number(now.slice(0, 4)) - (Number(now.slice(5, 7)) < 9 ? 1 : 0),
+        nullable = (value, max) => value === null || Number.isSafeInteger(value) && value >= 0 && value <= max;
+      if (row.group_id !== current.defaultGroupId || row.person_id !== current.publisherId || row.service_year !== serviceYear || serviceYear > currentYear ||
+          !Number.isSafeInteger(row.target_minutes) || row.target_minutes < 1 || row.target_minutes > MAX_DIARY_MINUTES * 12 ||
+          !Array.isArray(row.months) || row.months.length !== 12 || !(row.updated_at === null || typeof row.updated_at === 'string')) throw new Error('Invalid annual goal');
+      if (row.updated_at !== null) responseInstant(row.updated_at);
+      const version = responseVersion(row.version), expected = serviceMonths(serviceYear), months = Array.from(row.months).map((item, i) => {
+        if (!stateObject(item) || item.month !== expected[i] || !['regular', 'auxiliary', 'publisher'].includes(item.kind) ||
+            !['approved', 'diary', 'retroactive', 'missing', 'future', 'not_regular'].includes(item.source) ||
+            !nullable(item.minutes, MAX_DIARY_MINUTES) || !nullable(item.studies, 9999) ||
+            !nullable(item.retro_minutes, MAX_DIARY_MINUTES) || !nullable(item.retro_studies, 9999) ||
+            (item.retro_minutes === null) !== (item.retro_studies === null) || typeof item.can_edit_retro !== 'boolean' ||
+            (item.source === 'future') !== (item.month > now) ||
+            item.can_edit_retro !== (item.month < now && ['missing', 'retroactive'].includes(item.source)) ||
+            (['approved', 'diary', 'retroactive', 'missing'].includes(item.source) && item.kind !== 'regular') ||
+            (['future', 'missing', 'not_regular'].includes(item.source) && (item.minutes !== null || item.studies !== null)) ||
+            (item.source === 'diary' && (item.minutes === null || item.studies !== null)) ||
+            (item.source === 'retroactive' && (item.minutes === null || item.studies === null || item.minutes !== item.retro_minutes || item.studies !== item.retro_studies))) throw new Error('Invalid annual month');
+        return {month: item.month, kind: item.kind, source: item.source, minutes: item.minutes, studies: item.studies,
+          retroMinutes: item.retro_minutes, retroStudies: item.retro_studies, canEditRetro: item.can_edit_retro};
+      });
+      return {groupId: row.group_id, personId: row.person_id, serviceYear, today, targetMinutes: row.target_minutes,
+        version, updatedAt: row.updated_at, months};
+    } catch (_) { throw new CloudError('A nuvem retornou um acompanhamento anual inválido. Recarregue seu cartão.', 'invalid_response'); }
+  }
+
   function checkedVersion(value, minimum = 0) {
     if (!Number.isSafeInteger(value) || value < minimum || value >= Number.MAX_SAFE_INTEGER) {
       throw new CloudError('Recarregue os dados antes de continuar.', 'invalid_revision');
@@ -495,6 +532,50 @@
       } catch (error) { throw privateDiaryError(error); }
     }
 
+    async function readOwnAnnual(serviceYear) {
+      const year = checkedServiceYear(serviceYear);
+      try {
+        const current = await profile();
+        if (current.role !== 'publisher') throw new AccessDeniedError();
+        const result = await client.rpc('read_em_dia_own_annual', {p_service_year: year});
+        if (result.error) throw result.error;
+        return ownAnnualResult(objectResult(result.data), current, year);
+      } catch (error) { throw privateDiaryError(error); }
+    }
+
+    async function saveOwnAnnualGoal({serviceYear, targetMinutes, expectedVersion} = {}) {
+      const year = checkedServiceYear(serviceYear), version = checkedVersion(expectedVersion);
+      if (!Number.isSafeInteger(targetMinutes) || targetMinutes < 1 || targetMinutes > MAX_DIARY_MINUTES * 12) throw new CloudError('Informe uma meta anual válida.', 'invalid_target');
+      try {
+        const current = await profile();
+        if (current.role !== 'publisher') throw new AccessDeniedError();
+        const result = await client.rpc('save_em_dia_own_annual_goal', {p_service_year: year, p_target_minutes: targetMinutes, p_expected_version: version});
+        if (result.error) throw result.error;
+        const row = objectResult(result.data), saved = ownAnnualResult(row, current, year);
+        if (typeof row.unchanged !== 'boolean' || saved.targetMinutes !== targetMinutes ||
+            (row.unchanged ? saved.version < version : saved.version !== version + 1)) throw new CloudError('Não foi possível confirmar a meta anual.', 'invalid_response');
+        return {...saved, unchanged: row.unchanged};
+      } catch (error) { throw privateDiaryError(error, true); }
+    }
+
+    async function saveOwnAnnualRetro({serviceYear, month, minutes, studies, expectedVersion} = {}) {
+      const year = checkedServiceYear(serviceYear), selectedMonth = checkedMonth(month), version = checkedVersion(expectedVersion);
+      if (!serviceMonths(year).includes(selectedMonth)) throw new CloudError('Escolha um mês deste ano de serviço.', 'invalid_month');
+      if (!(minutes === null && studies === null || Number.isSafeInteger(minutes) && minutes >= 0 && minutes <= MAX_DIARY_MINUTES &&
+          Number.isSafeInteger(studies) && studies >= 0 && studies <= 9999)) throw new CloudError('Informe as horas e os estudos completos do mês anterior.', 'invalid_retro');
+      try {
+        const current = await profile();
+        if (current.role !== 'publisher') throw new AccessDeniedError();
+        const result = await client.rpc('save_em_dia_own_annual_retro', {p_service_year: year, p_month: selectedMonth,
+          p_minutes: minutes, p_studies: studies, p_expected_version: version});
+        if (result.error) throw result.error;
+        const row = objectResult(result.data), saved = ownAnnualResult(row, current, year), selected = saved.months.find(item => item.month === selectedMonth);
+        if (typeof row.unchanged !== 'boolean' || !selected.canEditRetro || selected.retroMinutes !== minutes || selected.retroStudies !== studies ||
+            (row.unchanged ? saved.version < version : saved.version !== version + 1)) throw new CloudError('Não foi possível confirmar o mês anterior.', 'invalid_response');
+        return {...saved, unchanged: row.unchanged};
+      } catch (error) { throw privateDiaryError(error, true); }
+    }
+
     async function changeOwnTimer({action, timerId, expectedVersion} = {}) {
       const statuses = {start: 'running', pause: 'paused', resume: 'running', stop: 'stopped', discard: 'idle'};
       if (typeof action !== 'string' || !Object.hasOwn(statuses, action)) throw new CloudError('Escolha uma ação válida para o cronômetro.', 'invalid_timer_action');
@@ -760,7 +841,7 @@
       };
     }
 
-    return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, submitOwnReport, readOwnHours, saveOwnHours, saveOwnHoursLaunch, submitOwnHours, readOwnTimer, changeOwnTimer, postOwnTimer, listRevisions, reviewRevision,
+    return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, submitOwnReport, readOwnHours, saveOwnHours, saveOwnHoursLaunch, submitOwnHours, readOwnAnnual, saveOwnAnnualGoal, saveOwnAnnualRetro, readOwnTimer, changeOwnTimer, postOwnTimer, listRevisions, reviewRevision,
       transferGroups, transferPublisher, publisherAccounts, listUsers, createUser, assignUser, createPublisherUser,
       login, loginPassword, logout, session, subscribeAuth});
   }

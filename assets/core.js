@@ -2,7 +2,7 @@
 (function(root){'use strict';
 const APP='em-dia-relatorios',VERSION=1,MONTHS=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 const KINDS={publisher:'Publicador',regular:'Pioneiro regular',auxiliary:'Pioneiro auxiliar'};
-// Targets configured for this application. Only monthly tracking is presented.
+// Default targets configured for this application; the private annual goal is adjustable.
 const REGULAR_PIONEER_TARGETS=Object.freeze({monthlyHours:50,annualHours:600});
 const DIARY_LIMITS=Object.freeze({maxMinutes:744*60,maxNoteLength:1000});
 function timerElapsedMs({status,elapsedMs,receivedAt}={},now){
@@ -38,6 +38,50 @@ function regularMonthlyGoal({kind,month,today,totalMinutes,entryCount}={}){
     dailyMinutesNeeded:remainingMinutes===0?0:closed?null:Math.ceil(remainingMinutes/daysRemaining),closed,
     status:remainingMinutes===0?'achieved':closed?'closed_short':'in_progress'};
 }
+function serviceYearForMonth(month){if(!validMonth(month))throw Error('Mês inválido.');return Number(month.slice(0,4))-(Number(month.slice(5,7))<9?1:0);}
+function regularAnnualProgress(bundle){
+  const fail=()=>{throw Error('Dados inválidos para acompanhar a meta anual.');},nullable=(v,max)=>v===null||Number.isSafeInteger(v)&&v>=0&&v<=max;
+  if(!bundle||typeof bundle!=='object'||!Number.isInteger(bundle.serviceYear)||bundle.serviceYear<1900||bundle.serviceYear>2198||
+    typeof bundle.today!=='string'||!/^(19|20|21)\d{2}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(bundle.today))fail();
+  const day=new Date(bundle.today+'T12:00:00Z');if(day.toISOString().slice(0,10)!==bundle.today||bundle.serviceYear>serviceYearForMonth(bundle.today.slice(0,7))||
+    !Number.isSafeInteger(bundle.targetMinutes)||bundle.targetMinutes<1||bundle.targetMinutes>DIARY_LIMITS.maxMinutes*12||!Array.isArray(bundle.months)||bundle.months.length!==12)fail();
+  const months=periodMonths(bundle.serviceYear,'service'),now=bundle.today.slice(0,7),closed=bundle.serviceYear<serviceYearForMonth(now);
+  let recordedMinutes=0,knownMonths=0,unknownMonths=0,studies=0,knownStudyMonths=0,unknownStudyMonths=0;
+  Array.from(bundle.months).forEach((row,i)=>{
+    if(!row||row.month!==months[i]||!['regular','auxiliary','publisher'].includes(row.kind)||!['approved','diary','retroactive','missing','future','not_regular'].includes(row.source)||
+      !nullable(row.minutes,DIARY_LIMITS.maxMinutes)||!nullable(row.studies,9999)||!nullable(row.retroMinutes,DIARY_LIMITS.maxMinutes)||!nullable(row.retroStudies,9999)||
+      (row.retroMinutes===null)!==(row.retroStudies===null)||typeof row.canEditRetro!=='boolean'||(row.source==='future')!==(row.month>now)||
+      row.canEditRetro!==(row.month<now&&['missing','retroactive'].includes(row.source))||
+      (['approved','diary','retroactive','missing'].includes(row.source)&&row.kind!=='regular')||
+      (['future','missing','not_regular'].includes(row.source)&&(row.minutes!==null||row.studies!==null))||
+      (row.source==='diary'&&(row.minutes===null||row.studies!==null))||
+      (row.source==='retroactive'&&(row.minutes===null||row.studies===null||row.minutes!==row.retroMinutes||row.studies!==row.retroStudies)))fail();
+    if(row.kind!=='regular'||['future','not_regular'].includes(row.source))return;
+    if(row.minutes===null)unknownMonths++;else{knownMonths++;recordedMinutes+=row.minutes;}
+    if(row.studies===null)unknownStudyMonths++;else{knownStudyMonths++;studies+=row.studies;}
+  });
+  const remainingMinutes=Math.max(0,bundle.targetMinutes-recordedMinutes),excessMinutes=Math.max(0,recordedMinutes-bundle.targetMinutes),
+    rounded=Math.round(recordedMinutes*1000/bundle.targetMinutes)/10,percentage=remainingMinutes>0?Math.min(99.9,rounded):rounded,
+    monthsRemaining=closed?0:months.filter(month=>month>=now).length;
+  return {serviceYear:bundle.serviceYear,targetMinutes:bundle.targetMinutes,recordedMinutes,remainingMinutes,excessMinutes,percentage,
+    barPercentage:Math.min(100,percentage),knownMonths,unknownMonths,studies,knownStudyMonths,unknownStudyMonths,monthsRemaining,
+    monthlyMinutesNeeded:closed?null:Math.ceil(remainingMinutes/monthsRemaining),closed,
+    status:remainingMinutes===0?'achieved':closed?(knownMonths?'closed_short':'no_entries'):'in_progress'};
+}
+function publisherReportText({name,month,kind,participated,minutes,studies}={}){
+  const fail=()=>{throw Error('Preencha os dados completos do relatório antes de compartilhar.');};
+  if(typeof name!=='string'||!name.trim()||name.length>160||/[\x00-\x1f\x7f]/.test(name)||!validMonth(month)||!['regular','auxiliary','publisher'].includes(kind)||
+    !Number.isSafeInteger(studies)||studies<0||studies>9999||!(participated===null||typeof participated==='boolean'))fail();
+  const lines=['Prezado irmão, segue o meu relatório do mês de "'+monthLabel(month)+'"','- Nome: '+name.trim()];
+  if(kind==='publisher'){
+    if(typeof participated!=='boolean'||minutes!==null)fail();
+    lines.push('- Participou no ministério?',participated?'Sim':'Não','- Tem estudos bíblicos?',studies?'Sim, '+studies:'Não');
+  }else{
+    if(!Number.isSafeInteger(minutes)||minutes<0||minutes>DIARY_LIMITS.maxMinutes)fail();
+    lines.push('- Horas: '+String(Math.floor(minutes/60)).padStart(2,'0')+':'+String(minutes%60).padStart(2,'0')+'h','- Estudos: '+studies);
+  }
+  return lines.join('\n');
+}
 function currentMonth(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');}
 function addMonth(m,n){if(!validMonth(m))throw Error('Mês inválido.');const [y,a]=m.split('-').map(Number),d=new Date(y,a-1+n,1);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');}
 const monthLabel=m=>validMonth(m)?MONTHS[Number(m.slice(5))-1]+' de '+m.slice(0,4):'Mês não informado';
@@ -72,6 +116,6 @@ for(const [m,entries] of Object.entries(s.reminders)){if(!validMonth(m)||!obj(en
 function parseBackup(raw){if(typeof raw!=='string'||raw.length>12*1024*1024)throw Error('Backup muito grande. Limite: 12 MB.');let s;try{s=JSON.parse(raw,(k,v)=>{if(['__proto__','prototype','constructor'].includes(k))throw Error('Chave não permitida.');return v;});}catch(e){throw Error('JSON inválido. Selecione um backup original do Em dia.');}validate(s);return s;}
 function monthlyText(s,m,scope='received'){const a=summary(s,m),lines=['Relatórios de '+monthLabel(m),[s.settings.congregation,s.settings.group].filter(Boolean).join(' · '),'Resumo do mês: '+a.received+'/'+a.total+' recebidos | '+a.pending+' pendentes | '+a.review+' a conferir',''];for(const {p,r,status:st,kind} of monthly(s,m,scope)){lines.push('Nome: '+p.name,'Mês: '+monthLabel(m));if(st==='pending')lines.push('Situação: Pendente');else{if(kind==='publisher')lines.push('- Participou no ministério? '+(r.participated===null?'Não informado':r.participated?'Sim':'Não'));else lines.push('Horas: '+number(r.hours)+(r.hours!==null?'h':'')+' ('+(kind==='regular'?'Regular':'Auxiliar')+')');lines.push('Estudos bíblicos: '+number(r.studies));if(st==='review')lines.push('Conferir: falta informar '+missing(r).join(', ')+'.');}lines.push('--------------------');}lines.push('Totais dos recebidos: '+number(a.hours)+'h de pioneiros; '+a.studies+' estudos informados.');if(a.unknownStudies||a.unknownHours)lines.push('Totais parciais: há campos não informados.');return lines.join('\n');}
 const reminderText=(s,p,m)=>s.settings.reminder.replaceAll('{nome}',p.name).replaceAll('{mes}',monthLabel(m));
-const api={APP,VERSION,MONTHS,KINDS,REGULAR_PIONEER_TARGETS,DIARY_LIMITS,timerElapsedMs,regularMonthlyGoal,clone,uid,norm,validMonth,currentMonth,addMonth,monthLabel,emptyState,num,number,inPeriod,roleAt,getReport,kindAt,participation,missing,status,monthPeople,monthly,summary,periodMonths,annualDetail,annualSummary,report,validate,parseBackup,monthlyText,reminderText};
+const api={APP,VERSION,MONTHS,KINDS,REGULAR_PIONEER_TARGETS,DIARY_LIMITS,timerElapsedMs,regularMonthlyGoal,serviceYearForMonth,regularAnnualProgress,publisherReportText,clone,uid,norm,validMonth,currentMonth,addMonth,monthLabel,emptyState,num,number,inPeriod,roleAt,getReport,kindAt,participation,missing,status,monthPeople,monthly,summary,periodMonths,annualDetail,annualSummary,report,validate,parseBackup,monthlyText,reminderText};
 if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.EmDiaCore=api;
 })(typeof window!=='undefined'?window:globalThis);
