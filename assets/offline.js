@@ -228,6 +228,7 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
       catch(error){await remoteFailure(error,userId,true);if(await identityId()===userId){needsRefresh=true;lastError='A ação foi confirmada. Atualize a cópia deste aparelho quando a conexão voltar.';notify();}return {...result,refreshRequired:true};}}
     return result;}
   const api={ready,sync,getSyncStatus,subscribeSync,hasPending,exportPending,discardPending,logoutSafe,
+    invalidateAccess:async({userId,reason}={})=>{if(!['auth_required','access_denied'].includes(reason))throw new OfflineError('Motivo de acesso inválido.','invalid_input');if(await identityId()===userId)await block(userId,reason);else await ensure();return getSyncStatus();},
     session:async()=>{let row=await ensure();if(!row&&isOnline()){await ready();row=active;}return row&&!row.blocked?{user:{id:row.userId},offline:!isOnline()}:null;},
     profile:async()=>{const row=await ensure();if(!row||row.blocked)throw new Errors.AuthRequiredError();return clone(row.cache.profile);},
     groups:async()=>{const row=await ensure();if(!row||row.blocked)throw unavailable();return clone(row.cache.groups);},
