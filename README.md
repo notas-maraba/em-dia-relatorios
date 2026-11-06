@@ -2,6 +2,12 @@
 
 Aplicativo em português para acompanhar relatórios mensais, cadastrar publicadores e períodos de pioneiro, e gerar PDFs mensais e anuais.
 
+Em Meu cartão, “Minha condição neste mês → Alterar” permite informar Publicador, Pioneiro regular ou Pioneiro auxiliar no mês selecionado. Está disponível para todas as contas vinculadas a um cartão, inclusive administrador e superintendente. A escolha libera o diário e o cronômetro nos meses de pioneiro e aparece na administração do grupo. Ela vale apenas para aquele mês, preservando os demais períodos e os lançamentos já salvos.
+
+Quando há relatórios pessoais pendentes de sincronização no mesmo grupo administrado, sincronize-os antes de salvar alterações amplas desse grupo. O aplicativo preserva o formulário e a fila.
+
+O relatório enviado usa a condição escolhida. Um relatório já recebido mantém a condição e os totais aprovados até uma correção ser enviada e aceita; o responsável vê a condição informada separadamente enquanto houver diferença. A seleção por si só não envia um relatório. Sem internet, a escolha salva fica no aparelho e aparece ao responsável após sincronizar. Alterar um período pela administração substitui as escolhas dos meses abrangidos por esse período, preservando os demais.
+
 Na entrada, “Lembrar meu e-mail” guarda somente o endereço usado em um login bem-sucedido, se a opção for marcada. Não guarda a senha. “Permanecer conectado” mantém a sessão entre aberturas do navegador; desmarcado, o acesso fica na sessão do navegador. Fechar apenas uma aba ou suspender o aplicativo pode preservar essa sessão, conforme o navegador. Em aparelho compartilhado, use Sair. Essas escolhas não apagam alterações pendentes de sincronização.
 
 Administrador e superintendente também podem ter um cartão pessoal, mantendo suas permissões de administração. A administração vincula explicitamente a conta ao cartão correto em Usuários. O botão Meu cartão abre apenas esse cartão; Administração retorna ao trabalho do grupo. O vínculo pessoal é independente do grupo em consulta. O diário, cronômetro, relatórios, envio de correções e progresso anual seguem as mesmas regras do acesso de publicador, conforme a condição da pessoa em cada mês. Um vínculo não é deduzido pelo nome ou e-mail.
@@ -16,7 +22,7 @@ A versão 5 usa Supabase Auth e um banco privado organizado por grupos e três p
 
 Ao entrar, o responsável vê o checklist do grupo vinculado à conta; o publicador vê Meu cartão. O vínculo também define o grupo inicial de uma conta administradora. Somente a administração pode consultar outro grupo pelo seletor no topo; essa consulta não altera o grupo padrão. Cada grupo possui base e revisão próprias. Dois superintendentes vinculados ao mesmo grupo administram a mesma lista.
 
-O primeiro relatório enviado pelo publicador é recebido automaticamente. Se mudar um relatório já recebido, o reenvio aguarda decisão em Revisões: o responsável compara o recebido com a proposta e aceita ou ignora. Até a aceitação, o relatório recebido permanece válido. Cada envio e decisão verifica a versão para evitar que uma resposta atrasada sobrescreva outra edição. Participação, horas e estudos são os únicos campos enviados pelo publicador; a condição de pioneiro vem do cadastro e do histórico administrado pelo responsável.
+O primeiro relatório enviado pelo publicador é recebido automaticamente. Se mudar um relatório já recebido, o reenvio aguarda decisão em Revisões: o responsável compara o recebido com a proposta e aceita ou ignora. Até a aceitação, o relatório recebido permanece válido. Cada envio e decisão verifica a versão para evitar que uma resposta atrasada sobrescreva outra edição. Participação, horas e estudos acompanham a condição mensal informada no próprio cartão. O perfil de acesso e o vínculo ao grupo continuam sob administração; informar pioneiro não concede permissões administrativas.
 
 Nos meses de pioneiro regular ou auxiliar, Meu cartão também oferece um diário de horas. O publicador registra horas e minutos em cada dia, edita os lançamentos e acompanha a soma do mês. Os lançamentos são salvos no aparelho e sincronizados com a nuvem; só aparecem para o acesso vinculado àquele cartão. Eles não são relatórios entregues e não alteram o total já recebido.
 

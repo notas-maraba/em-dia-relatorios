@@ -6,6 +6,8 @@ Nunca envie backups, HTML pessoal, relatórios, capturas com dados reais ou arqu
 
 A versão 5.2 exige a migração 20261106193836_manager_personal_cards antes da interface. Ela não atribui cartões reais nem altera os registros existentes; o administrador faz o vínculo explícito em Usuários → Cartão pessoal. O perfil de administração e o grupo em consulta permanecem separados do cartão pessoal. Não reaplique migrações já registradas. Recuperação de senha ficou fora desta atualização.
 
+A versão 5.3 exige as migrações 20261106204602_own_month_condition e 20261106204933_inactive_month_diary_snapshot antes da interface. Elas preservam os registros existentes, sem escolher condições para contas reais. As novas rotas conferem ator, vínculo, revisão e condição capturada no envio; clientes antigos continuam aceitos em meses sem declaração explícita. Não reaplique migrações já registradas.
+
 ## Supabase
 
 1. Use projeto dedicado e confirme o plano.
