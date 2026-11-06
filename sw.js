@@ -1,21 +1,23 @@
-/* Em dia 5.0.0: cache only this explicit public application shell. */
+/* Em dia 5.1.0: cache only this explicit public application shell. */
 'use strict';
-const RELEASE = '5.0.0';
+const RELEASE = '5.1.0';
 const BASE = new URL('./', self.location.href);
 const CACHE_PREFIX = 'em-dia-public-shell-' + encodeURIComponent(BASE.pathname) + '-';
 const CACHE_NAME = CACHE_PREFIX + RELEASE;
 const SHELL = [
   './',
   './index.html',
-  './assets/app.css?v=5.0.0',
-  './assets/core.js?v=5.0.0',
+  './assets/app.css?v=5.1.0',
+  './assets/core.js?v=5.1.0',
   './assets/pdf.js',
   './assets/vendor/supabase.js',
-  './assets/config.js?v=5.0.0',
-  './assets/cloud.js?v=5.0.0',
-  './assets/offline.js?v=5.0.0',
-  './assets/app.js?v=5.0.0',
-  './assets/install.js?v=5.0.0',
+  './assets/config.js?v=5.1.0',
+  './assets/cloud.js?v=5.1.0',
+  './assets/offline.js?v=5.1.0',
+  './assets/account.js?v=5.1.0',
+  './assets/theme.js?v=5.1.0',
+  './assets/app.js?v=5.1.0',
+  './assets/install.js?v=5.1.0',
   './manifest.webmanifest',
   './assets/icons/relatorios-32-v311.png',
   './assets/icons/relatorios-192-v311.png',

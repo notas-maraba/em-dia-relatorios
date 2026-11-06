@@ -19,6 +19,8 @@ Faça login, selecione o grupo e use Dados → Importar backup. Exporte uma cóp
 
 Em atualizações, preserve a base e as contas. Não reaplique a criação do schema; use migrações revisadas.
 
+Na versão 5.1, aplique a migração private_account_profiles antes da interface, após uma cópia privada atual dos onze conjuntos existentes. Ela cria somente a tabela privada de perfis e suas funções, sem preencher fotos, nomes ou alterar usuários e dados existentes. A tabela começa vazia e precisa entrar nas próximas cópias do banco. Confira account-profile-security.sql com rollback e os consultores de segurança. Nenhuma senha ou foto real deve ser alterada para testar. Publique account.js e theme.js com os demais recursos; o tema carrega antes do CSS. Não coloque fotos reais no repositório ou na lista do service worker.
+
 Na versão 5, a migração de sincronização deve preceder a interface. Guarde uma cópia privada atualizada dos dez conjuntos existentes, incluindo diários, cronômetros e acompanhamento anual. A nova tabela privada de recibos começa vazia e deve entrar nas próximas cópias do banco. Confira autorização de ator e vínculo antes de qualquer replay, repetição com resposta perdida, CAS e duração do cronômetro sem conexão. Nunca use dados reais para ensaiar gravações offline.
 
 A cópia privada do aparelho é criada em IndexedDB em tempo de execução; não é um arquivo para upload. Publique assets/offline.js junto aos outros arquivos públicos e atualize a versão do shell. Não adicione respostas privadas ao service worker. Não copie a fila de um aparelho para o repositório nem substitua dados atuais da nuvem por um snapshot antigo.

@@ -1,5 +1,13 @@
 # Verificação
 
+Na versão 5.1.0 passaram 514 testes Node: 74 de regras/PDF, 132 de nuvem, 37 de offline, 35 de conta/foto/senha, 10 de tema, 182 da interface, 33 de administração e 11 de instalação/cache. A sintaxe e git diff --check passaram. Os testes usam contas fictícias, imagens sintéticas, Auth simulado e IndexedDB emulado; nenhuma senha ou foto real foi alterada para testar.
+
+account-profile-security.sql passou no banco com transação e rollback, deixando zero usuários e perfis fictícios. Cobre os três papéis, dono esperado, acesso direto negado, isolamento entre contas, versão exata, foto JPEG/base64 limitada e nomes inválidos. A migração preservou integralmente os onze conjuntos anteriores e começou com account_profiles vazio.
+
+Os testes de conta conferem cache por usuário, revogação persistente, resposta tardia após sair, limpeza sem atingir outra conta, falha de armazenamento após confirmação, JWT fixo na mudança de senha, código solicitado só por ação explícita e ausência de senhas no cache/fila/logs. Os de interface cobrem prévia e remoção de foto, duas seleções fora de ordem, troca de conta/modal, senha com confirmação e limpeza dos campos, saída recusada com pendências e ocultação imediata na perda de acesso mesmo quando registrar o bloqueio falha.
+
+Tema claro/escuro mantém o rascunho aberto e a preferência do aparelho. Testes conferem contraste das cores usadas, carregamento antes do CSS e preservação da impressão clara. A validação de layout em celular real depende do navegador do aparelho; os testes de módulos não a substituem.
+
 Na preparação da versão 5.0.0 passaram 446 testes Node: 74 de regras/PDF, 132 de nuvem, 35 de armazenamento/fila offline, 161 da interface, 33 da função de usuários e 11 de instalação/cache. A sintaxe e git diff --check também passaram. Os testes do aparelho usam relógios simulados e IndexedDB emulado; não representam um ensaio físico de suspensão ou modo avião em Android/iOS.
 
 Na versão 5, tests/offline.test.cjs usa IndexedDB emulado com transações reais da API para verificar persistência após reabrir, fila antes da rede, falha de armazenamento, isolamento de conta e vínculo, resposta perdida, versões dependentes e operações que não incrementam versão. Também cobre duas abas, conflitos sem substituição automática, calendário e duração do cronômetro durante a desconexão. A integração da interface usa o wrapper real e dados fictícios para conferir lançamento, reabertura, envio ainda não entregue e bloqueio de saída com pendências.

@@ -2,6 +2,12 @@
 
 Aplicativo em português para acompanhar relatórios mensais, cadastrar publicadores e períodos de pioneiro, e gerar PDFs mensais e anuais.
 
+No cabeçalho, cada conta tem foto, nome de exibição e tipo de acesso. Toque na foto ou no nome para abrir Meu perfil, escolher ou remover uma foto e alterar a senha. Isso está disponível para administrador, superintendente e publicador. A foto é privada da conta e não acompanha a transferência de um cartão. O nome de exibição não altera cadastros nem relatórios.
+
+O botão de lua alterna entre modo claro e escuro, preservando a preferência neste aparelho. O botão ao lado encerra a sessão, respeitando as pendências offline. Ajuda e sincronização continuam acessíveis no cabeçalho. O tema da impressão e dos PDFs permanece claro.
+
+Foto e nome já carregados continuam disponíveis sem conexão. Alterá-los ou mudar a senha exige internet. A foto escolhida recebe uma prévia quadrada e é reencodada para JPEG antes do envio, sem manter o arquivo original nem seus metadados. Não há endereço público da foto. Senhas e códigos de confirmação são enviados somente ao Auth, sem passar pelo banco de perfis ou pela fila offline. Se a conta exigir código adicional, o próprio usuário solicita o envio no formulário.
+
 A versão 5 usa Supabase Auth e um banco privado organizado por grupos e três perfis. O site público mostra somente o login. O administrador gerencia todos os grupos e usuários. O superintendente administra apenas seu grupo. O publicador consulta somente seu cartão e seus relatórios. Não há autoautorização nem catálogo público de grupos.
 
 Ao entrar, o responsável vê o checklist do grupo vinculado à conta; o publicador vê Meu cartão. O vínculo também define o grupo inicial de uma conta administradora. Somente a administração pode consultar outro grupo pelo seletor no topo; essa consulta não altera o grupo padrão. Cada grupo possui base e revisão próprias. Dois superintendentes vinculados ao mesmo grupo administram a mesma lista.
