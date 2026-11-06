@@ -4,6 +4,8 @@ Publique somente o código desta pasta, com index.html, assets/ e .nojekyll na r
 
 Nunca envie backups, HTML pessoal, relatórios, capturas com dados reais ou arquivos da transferência ao GitHub. Revise a lista manualmente; .gitignore não protege uploads pelo navegador.
 
+A versão 5.2 exige a migração 20261106193836_manager_personal_cards antes da interface. Ela não atribui cartões reais nem altera os registros existentes; o administrador faz o vínculo explícito em Usuários → Cartão pessoal. O perfil de administração e o grupo em consulta permanecem separados do cartão pessoal. Não reaplique migrações já registradas. Recuperação de senha ficou fora desta atualização.
+
 ## Supabase
 
 1. Use projeto dedicado e confirme o plano.

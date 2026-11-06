@@ -44,6 +44,7 @@ function harness(overrides={},options={}) {
   if(options.offlineFactory)window.EmDiaOffline={create(args){offlineAdapter=options.offlineFactory(args);return offlineAdapter;}};
   if(options.accountFactory)window.EmDiaAccount={create(args){accountAdapter=options.accountFactory(args);return accountAdapter;},prepareAvatar:options.prepareAvatar||(async()=>PROFILE_AVATAR)};
   if(options.theme)window.EmDiaTheme=options.theme;
+  window.EmDiaAccess={create(args){const api=options.accessFactory?options.accessFactory(args):{storage:{},identity:()=>{try{return JSON.parse(options.storage?.getItem('em-dia-auth-v1')||'null')?.user?.id||null;}catch(_){return null;}},preferences:()=>({rememberEmail:false,email:'',stayConnected:false}),prepareLogin(){},rememberSuccessfulEmail(){},forgetRememberedEmail(){},attachClient(){},observeAuthEvent:()=>false,recoveryState:()=>null};window.testAccess=api;return api;}};
   window.indexedDB=options.indexedDB;
   const TestURL=class extends URL {static createObjectURL(blob){downloads.push(blob);return 'blob:fixture';}static revokeObjectURL(){}};
   const ClockDate=class extends Date {constructor(...args){super(...(args.length?args:[clock]));}static now(){return clock;}};
@@ -85,6 +86,7 @@ function accountBoundary(args,overrides={}){
   api.test={args,calls,setProfile(value){data=C.clone(value);}};return api;
 }
 function themeMock(){let current='light';const listeners=new Set(),api={current:()=>current,toggle(){current=current==='light'?'dark':'light';for(const fn of listeners)fn(current);return current;},subscribe(fn){listeners.add(fn);fn(current);return()=>listeners.delete(fn);}};return api;}
+if(require.main===module){
 test('records remain hidden until session verification and cloud read both finish',async()=>{
   const verification=deferred(),read=deferred();let readCalls=0;
   const h=harness({session:()=>verification.promise,read:()=>{readCalls++;return read.promise;}});
@@ -1611,3 +1613,6 @@ test('a late logout refusal leaves the private profile cache intact until logout
     assert.equal(logoutAttempts,1);assert.equal(h.account().test.calls.forget.length,0);assert.ok(h.window.EmDiaApp.getState());assert.match(h.element('#account-brand').innerHTML,/Pessoa do Perfil/);
   }
 });
+
+}
+module.exports={harness,flush,deferred,fixture,errors,offlineBoundary};

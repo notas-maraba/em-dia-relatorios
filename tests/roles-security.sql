@@ -308,10 +308,12 @@ begin
   select * into v_row from public.provision_em_dia_access(v_new_user,'superintendent',v_group,null);
   assert v_row.id=v_group;
   reset role;
-  assert not exists(select 1 from em_dia_private.publisher_links where user_id=v_publisher);
+  assert exists(select 1 from em_dia_private.publisher_links where user_id=v_publisher and group_id=v_empty_group and person_id='fixture_main');
   assert (select access_role='superintendent' and not is_admin from public.em_dia_members where user_id=v_publisher);
   assert (select exists(select 1 from jsonb_array_elements(state->'people') p where p->>'id'='fixture_main') from public.em_dia_states where group_id=v_empty_group);
   set local role authenticated;
+  -- Changing the management role now retains the personal card. Replacing its login requires explicit unlink.
+  perform public.bind_em_dia_personal_card(v_publisher,null,null,v_empty_group,'fixture_main',v_admin);
   perform public.provision_em_dia_publisher_account(v_replacement,v_empty_group,'fixture_main');
   reset role;
   assert (select user_id=v_replacement and version=7 from em_dia_private.report_revisions where id=v_revision_id);

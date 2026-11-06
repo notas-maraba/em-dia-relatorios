@@ -461,3 +461,11 @@
   html[data-theme="dark"] .account-photo-input::file-selector-button{background:var(--soft);color:var(--green)}
   html[data-theme="dark"] .account-photo-input:disabled{background:var(--muted-surface)}
 }
+
+/* Login preferences remain optional and usable by touch. */
+.login-preference{display:flex;align-items:center;gap:10px;min-height:44px;text-align:left;font-size:13px;cursor:pointer;color:var(--ink)}
+.login-preference input{width:20px;height:20px;flex:none;accent-color:var(--green)}
+.login-card .login-preferences{display:grid;gap:0}
+.login-card .login-preferences .help{margin:0 0 5px 30px;font-size:11px}
+.personal-mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px}
+.personal-mode-switch .btn{padding:9px 8px;font-size:12px}

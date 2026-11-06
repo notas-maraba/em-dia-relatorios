@@ -9,7 +9,9 @@ const uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}
 const integer=(value,min=0,max=Number.MAX_SAFE_INTEGER-1)=>Number.isSafeInteger(value)&&value>=min&&value<=max;
 class OfflineError extends Error{constructor(message,code='offline_unavailable'){super(message);this.name='OfflineError';this.code=code;}}
 const unavailable=()=>new OfflineError('Estes dados ainda não estão disponíveis neste aparelho. Conecte-se para preparar a cópia offline.');
-const binding=p=>JSON.stringify([p.userId,p.role,p.defaultGroupId,p.publisherId]);
+const personalGroup=p=>p.personalGroupId??(p.role==='publisher'?p.defaultGroupId:null);
+// Preserve v5.0 binding keys for unchanged accounts with pending operations.
+const binding=p=>JSON.stringify([p.userId,p.role,p.defaultGroupId,p.publisherId,...(p.role!=='publisher'&&personalGroup(p)?[personalGroup(p)]:[])]);
 const dayAt=ms=>{const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(ms));return ['year','month','day'].map(key=>parts.find(p=>p.type===key).value).join('-');};
 function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.now(),networkTimeoutMs=15000}={}){
   if(!cloud||!C||typeof identity!=='function')throw new OfflineError('Configuração offline indisponível.');
@@ -40,7 +42,7 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
   function getSyncStatus(){const pending=active?.outbox.length||0;return {online:isOnline(),available:!!active&&!active.blocked,pending,syncing:!!syncPromise,
     conflicts:(active?.outbox||[]).filter(op=>op.state==='conflict').map(op=>({operationId:op.id,kind:op.kind,code:op.errorCode||'conflict',message:'A nuvem e este aparelho têm alterações diferentes. Preserve a cópia pendente antes de decidir.'})),
     blocked:!!active?.blocked,blockedReason:active?.blocked||null,error:lastError,needsRefresh,lastSyncedAt:active?.lastSyncedAt||null,
-    scope:active?{userId:active.cache.profile.userId,role:active.cache.profile.role,defaultGroupId:active.cache.profile.defaultGroupId,publisherId:active.cache.profile.publisherId}:null,bindingKey:active?.binding||null};}
+    scope:active?{userId:active.cache.profile.userId,role:active.cache.profile.role,defaultGroupId:active.cache.profile.defaultGroupId,publisherId:active.cache.profile.publisherId,personalGroupId:personalGroup(active.cache.profile)}:null,bindingKey:active?.binding||null};}
   function notify(){const value=getSyncStatus();for(const listener of listeners){try{listener(clone(value));}catch(_){/* A view cannot interrupt storage or sync. */}}}
   function subscribeSync(fn){if(typeof fn!=='function')throw TypeError('Uma função é necessária.');listeners.add(fn);fn(getSyncStatus());return()=>listeners.delete(fn);}
   async function identityId(){const value=await identity();return typeof value==='string'&&value?value:null;}
@@ -54,16 +56,16 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
   function cacheSnapshot(snapshot,userId){
     const p=snapshot?.profile;if(!p||p.userId!==userId||!['admin','superintendent','publisher'].includes(p.role)||p.isAdmin!==(p.role==='admin')||
       !Array.isArray(snapshot.groups)||!Array.isArray(snapshot.states)||!Array.isArray(snapshot.diaries)||!Array.isArray(snapshot.annuals)||!Array.isArray(snapshot.revisions))throw new OfflineError('A cópia recebida não corresponde à conta.','invalid_response');
-    const cache={profile:{userId:p.userId,role:p.role,isAdmin:p.isAdmin,defaultGroupId:p.defaultGroupId,publisherId:p.publisherId},groups:snapshot.groups.map(g=>({id:g.id,name:g.name,createdAt:g.createdAt??null})),resources:{}};const set=(key,value)=>{cache.resources[key]={value:clone(value),at:stamp()};};
+    const cache={profile:{userId:p.userId,role:p.role,isAdmin:p.isAdmin,defaultGroupId:p.defaultGroupId,publisherId:p.publisherId,personalGroupId:personalGroup(p)},groups:snapshot.groups.map(g=>({id:g.id,name:g.name,createdAt:g.createdAt??null})),resources:{}};const set=(key,value)=>{cache.resources[key]={value:clone(value),at:stamp()};};
     const groups=new Set(cache.groups.map(g=>g.id));if(groups.size!==cache.groups.length)throw new OfflineError('Cópia duplicada.','invalid_response');
-    if(p.role==='publisher'){
-      const card=snapshot.ownCard;if(!card||card.groupId!==p.defaultGroupId||card.personId!==p.publisherId||card.state.people.length!==1||card.state.people[0].id!==p.publisherId||snapshot.states.length||snapshot.revisions.length)throw new OfflineError('Cópia fora do cartão.','invalid_response');
+    if(p.publisherId){
+      const card=snapshot.ownCard;if(!card||card.groupId!==personalGroup(p)||card.personId!==p.publisherId||card.state.people.length!==1||card.state.people[0].id!==p.publisherId||p.role==='publisher'&&(snapshot.states.length||snapshot.revisions.length))throw new OfflineError('Cópia fora do cartão.','invalid_response');
       C.validate(card.state);set('card',card);
-      for(const diary of snapshot.diaries){if(diary.groupId!==p.defaultGroupId||diary.personId!==p.publisherId)throw new OfflineError('Cópia fora do cartão.','invalid_response');set('diary:'+diary.month,diary);}
-      for(const annual of snapshot.annuals){if(annual.groupId!==p.defaultGroupId||annual.personId!==p.publisherId)throw new OfflineError('Cópia fora do cartão.','invalid_response');C.regularAnnualProgress(annual);set('annual:'+annual.serviceYear,annual);}
-      if(!snapshot.timer||snapshot.timer.groupId!==p.defaultGroupId||snapshot.timer.personId!==p.publisherId)throw new OfflineError('Cópia fora do cartão.','invalid_response');set('timer',snapshot.timer);
-    }else{
-      if(snapshot.ownCard||snapshot.diaries.length||snapshot.annuals.length||snapshot.timer)throw new OfflineError('Cópia fora do perfil.','invalid_response');
+      for(const diary of snapshot.diaries){if(diary.groupId!==personalGroup(p)||diary.personId!==p.publisherId)throw new OfflineError('Cópia fora do cartão.','invalid_response');set('diary:'+diary.month,diary);}
+      for(const annual of snapshot.annuals){if(annual.groupId!==personalGroup(p)||annual.personId!==p.publisherId)throw new OfflineError('Cópia fora do cartão.','invalid_response');C.regularAnnualProgress(annual);set('annual:'+annual.serviceYear,annual);}
+      if(!snapshot.timer||snapshot.timer.groupId!==personalGroup(p)||snapshot.timer.personId!==p.publisherId)throw new OfflineError('Cópia fora do cartão.','invalid_response');set('timer',snapshot.timer);
+    }else if(snapshot.ownCard||snapshot.diaries.length||snapshot.annuals.length||snapshot.timer)throw new OfflineError('Cópia fora do perfil.','invalid_response');
+    if(p.role!=='publisher'){
       for(const item of snapshot.states){if(!groups.has(item.groupId)||p.role==='superintendent'&&item.groupId!==p.defaultGroupId)throw new OfflineError('Cópia fora do grupo.','invalid_response');if(item.bundle!==null)C.validate(item.bundle.state);set('group:'+item.groupId,item.bundle);}
       for(const item of snapshot.revisions){if(!groups.has(item.groupId))throw new OfflineError('Cópia fora do grupo.','invalid_response');set('revisions:'+item.groupId,item.items);}
     }return cache;
@@ -118,7 +120,7 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
       const key='group:'+payload.groupId;get(key);requireVersion('expectedRevision',key);C.validate(payload.state);const v=version(key,'revision'),state=clone(payload.state);state.revision=v;
       result={state,revision:v,updatedAt:new Date(stamp()).toISOString(),queued:true};set(key,result);effect(key,'revision');
     }else{
-      if(p.role!=='publisher'||payload.groupId!==p.defaultGroupId||payload.personId!==p.publisherId)throw new Errors.AccessDeniedError();
+      if(!p.publisherId||payload.groupId!==personalGroup(p)||payload.personId!==p.publisherId)throw new Errors.AccessDeniedError();
       const today=dayAt(stamp()),current=today.slice(0,7),own=person();if(!own)throw unavailable();
       if(kind==='diary_launch'){
         if(!uuid(payload.id)||typeof payload.date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(payload.date)||new Date(payload.date+'T12:00:00Z').toISOString().slice(0,10)!==payload.date||payload.date>today||!(payload.minutes===null||integer(payload.minutes,0,C.DIARY_LIMITS.maxMinutes))||!(payload.note===null||typeof payload.note==='string'&&payload.note.length<=C.DIARY_LIMITS.maxNoteLength))throw new OfflineError('Confira o lançamento.','invalid_input');
@@ -136,7 +138,7 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
         else report=activity(payload.report,ownKind);
         const v=version(key,'version'),card=get('card'),prior=card.revisions.find(x=>x.month===month);card.revisions=card.revisions.filter(x=>x.month!==month);card.revisions.push({id:prior?.id||operationId,month,status:confirmation?.status||'queued',version:v,report:{...report,kind:ownKind,received:true},submittedAt:new Date(stamp()).toISOString(),reviewedAt:null});
         if(confirmation?.status==='accepted'){card.state.reports[month]??={};card.state.reports[month][own.id]={...report,kind:ownKind,received:true,notes:'',receivedDate:today,updatedAt:new Date(stamp()).toISOString()};}if(confirmation?.revision){card.revision=confirmation.revision;card.state.revision=confirmation.revision;}set('card',card);deriveAnnual(c,month);
-        result={status:'queued',version:v,groupId:p.defaultGroupId,personId:p.publisherId,month,revision:card.revision,queued:true,...(diary?{hoursVersion:diary.version,totalMinutes:diary.totalMinutes}:{})};effect(key,'version');
+        result={status:'queued',version:v,groupId:personalGroup(p),personId:p.publisherId,month,revision:card.revision,queued:true,...(diary?{hoursVersion:diary.version,totalMinutes:diary.totalMinutes}:{})};effect(key,'version');
       }else if(['annual_goal','annual_retro'].includes(kind)){
         if(!Number.isInteger(payload.serviceYear)||payload.serviceYear<1900||payload.serviceYear>2198||payload.serviceYear>C.serviceYearForMonth(current))throw new OfflineError('Ano inválido.','invalid_input');
         const key='annual:'+payload.serviceYear,annual=get(key);requireVersion('expectedVersion',key);
@@ -165,7 +167,7 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
   }
   async function enqueue(kind,args){
     let row=await ensure();if(!row){await ready();row=active;}if(!row)throw unavailable();if(row.blocked)throw new Errors.AccessDeniedError();const userId=row.userId,operationId=id();let output;
-    const payload={...clone(args),userId,groupId:kind==='group_save'?args.groupId:row.cache.profile.defaultGroupId,personId:kind==='group_save'?null:row.cache.profile.publisherId};
+    const payload={...clone(args),userId,groupId:kind==='group_save'?args.groupId:personalGroup(row.cache.profile),personId:kind==='group_save'?null:row.cache.profile.publisherId};
     const saved=await transact(userId,current=>{if(!current||current.binding!==row.binding||current.blocked)throw new Errors.AccessDeniedError();
       const cache=clone(current.cache),projected=project(cache,kind,payload,operationId),dependencies={};
       for(const [field,dep] of Object.entries(projected.deps)){const previous=current.tails[dep.resource];if(previous)dependencies[field]={operationId:previous.operationId,field:previous.field};}
@@ -221,7 +223,7 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
       const after=await identityId();if(userId&&after===userId)throw new OfflineError('Não foi possível encerrar a sessão neste aparelho. Tente sair novamente.','logout_failed');
       if(after)throw new Errors.AuthRequiredError();active=null;notify();for(const fn of authListeners)fn('SIGNED_OUT',null);
     }finally{loggingOut=false;}}
-  async function onlineOnly(method,args){if(!isOnline())throw new OfflineError('Esta ação precisa de uma conexão com a internet.','online_required');const mutating=['createGroup','createUser','assignUser','createPublisherUser','transferPublisher','reviewRevision'].includes(method);
+  async function onlineOnly(method,args){if(!isOnline())throw new OfflineError('Esta ação precisa de uma conexão com a internet.','online_required');const mutating=['createGroup','createUser','assignUser','createPublisherUser','bindPersonalCard','transferPublisher','reviewRevision'].includes(method);
     if(mutating&&await hasPending())throw new OfflineError('Sincronize as alterações antes desta ação.','pending_changes');const userId=await identityId();let result;
     try{result=await remote(()=>cloud[method](...args));}catch(error){await remoteFailure(error,userId,false);throw error;}
     if(mutating){if(!await still(userId))return {...result,refreshRequired:true};try{const row=await transact(userId);await installSnapshot(await remote(()=>cloud.offlineSnapshot()),userId,row?.generation||0);}
@@ -243,7 +245,7 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
     postOwnTimer:args=>enqueue('timer_post',{timerId:args.timerId,expectedTimerVersion:args.expectedTimerVersion,launchId:args.launchId,date:args.date,minutes:args.minutes,note:args.note??'',expectedHoursVersion:args.expectedHoursVersion}),
     logout:logoutSafe,subscribeAuth:fn=>{authListeners.add(fn);const stop=cloud.subscribeAuth?.((event,session)=>{if(event==='SIGNED_OUT'){active=null;notify();}fn(event,session);});return()=>{authListeners.delete(fn);stop?.();};}
   };
-  for(const method of ['createGroup','transferGroups','transferPublisher','publisherAccounts','listUsers','createUser','assignUser','createPublisherUser'])api[method]=(...args)=>onlineOnly(method,args);
+  for(const method of ['createGroup','transferGroups','transferPublisher','publisherAccounts','listUsers','createUser','assignUser','createPublisherUser','listPersonalBindings','bindPersonalCard'])api[method]=(...args)=>onlineOnly(method,args);
   for(const method of ['login','loginPassword'])api[method]=async(...args)=>{const result=await onlineOnly(method,args);active=null;await ready();return result;};
   api.saveOwnHours=async({date,minutes,expectedVersion}={})=>{const diary=await readResource('diary:'+String(date).slice(0,7)),items=diary.launches.filter(item=>item.date===date);
     if(items.length>1)throw new OfflineError('Edite os lançamentos individuais desta data.','invalid_input');
