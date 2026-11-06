@@ -414,14 +414,14 @@ test('cartão próprio rejeita outra pessoa, grupo, relatório ou notas internas
   }
 });
 
-test('envio próprio leva versão esperada e somente campos de atividade, sem escolher identidade ou tipo', async () => {
+test('envio próprio leva versão esperada e campos de atividade e condição esperada, sem escolher identidade', async () => {
   const m = mock({role: 'publisher', rpcResults: {submit_em_dia_own_report: {data: {status: 'accepted', version: 1, group_id: group.id, person_id: 'p1', month: '2026-10', revision: 5, unchanged: false}, error: null}}});
   const api = Cloud.create({client: m.client}), report = activity(), sending = api.submitOwnReport({month: '2026-10', report, expectedVersion: 0});
   report.studies = 999;
   assert.equal((await sending).status, 'accepted');
   assert.deepEqual(operationCalls(m.calls), [['rpc', 'submit_em_dia_own_report', {p_month: '2026-10', p_report: activity(), p_expected_version: 0}]]);
   const untouched = mock({role: 'publisher'}), safe = Cloud.create({client: untouched.client});
-  for (const changed of [{...activity(), kind: 'regular'}, {...activity(), personId: 'p2'}, {...activity(), received: true}, {...activity(), hours: -1}]) {
+  for (const changed of [{...activity(), kind: 'admin'}, {...activity(), personId: 'p2'}, {...activity(), received: true}, {...activity(), hours: -1}]) {
     await assert.rejects(safe.submitOwnReport({month: '2026-10', report: changed, expectedVersion: 0}), error => error.code === 'invalid_report');
   }
   await assert.rejects(safe.submitOwnReport({month: '2026-10', report: activity(), expectedVersion: '0'}), error => error.code === 'invalid_revision');
@@ -660,7 +660,7 @@ test('envio do diário usa as duas versões e somente participação e estudos s
   assert.deepEqual(result, {status: 'accepted', version: 1, groupId: group.id, personId: 'p1', month: '2026-10', revision: 5,
     unchanged: false, hoursVersion: 2, totalMinutes: 90});
   assert.deepEqual(operationCalls(m.calls), [['rpc', 'submit_em_dia_own_hours', {p_month: '2026-10', p_participated: true,
-    p_studies: 0, p_expected_hours_version: 2, p_expected_report_version: 0}]]);
+    p_studies: 0, p_expected_hours_version: 2, p_expected_report_version: 0, p_expected_kind:null}]]);
   assert(!JSON.stringify(result).includes('Do not return')); assert(!m.calls.some(call => call.table));
 });
 
@@ -1101,7 +1101,7 @@ test('lançamento do cronômetro envia duas versões e confirma recibo, diário 
   assert.deepEqual(result.receipt, {timerId, launchId: timerLaunchId, date: '2026-10-01', minutes: 1800,
     note: 'Timer fixture', postedAt: '2026-11-05T13:00:20.000Z'});
   assert.deepEqual(operationCalls(m.calls), [['rpc', 'post_em_dia_own_timer', {p_timer_id: timerId, p_expected_timer_version: 5,
-    p_launch_id: timerLaunchId, p_date: '2026-10-01', p_minutes: 1800, p_note: 'Timer fixture', p_expected_hours_version: 2}]]);
+    p_launch_id: timerLaunchId, p_date: '2026-10-01', p_minutes: 1800, p_note: 'Timer fixture', p_expected_hours_version: 2, p_expected_kind:null}]]);
   assert(!JSON.stringify(result).includes('Discarded fixture'));
 });
 
@@ -1419,4 +1419,30 @@ test('manager personal queued mutation checks personal scope instead of currentl
   const profile=managerPersonalProfile(), id=launchId(8), rpc={data:{operation_id:id,kind:'annual_goal',replayed:false,confirmation:{version:1}},error:null};
   const m=mock({profileRow:profile,rpcResults:{apply_em_dia_offline_operation:rpc}}),api=Cloud.create({client:m.client});await api.applyOfflineOperation({operationId:id,kind:'annual_goal',payload:{userId:user.id,groupId:otherGroupId,personId:'p1'}});
   await assert.rejects(api.applyOfflineOperation({operationId:id,kind:'annual_goal',payload:{userId:user.id,groupId:group.id,personId:'p1'}}),Cloud.AccessDeniedError);assert.equal(operationCalls(m.calls).length,1);
+});
+
+function conditionRow(fields={}){return {group_id:group.id,person_id:'p1',month:'2026-11',kind:'auxiliary',revision:4,unchanged:false,...fields};}
+test('own monthly condition uses only the trusted personal card, actor and exact group revision',async()=>{
+  const m=mock({role:'publisher',rpcResults:{save_em_dia_own_condition:{data:conditionRow(),error:null}}}),api=Cloud.create({client:m.client});
+  assert.deepEqual(await api.saveOwnCondition({month:'2026-11',kind:'auxiliary',expectedRevision:3}),{groupId:group.id,personId:'p1',month:'2026-11',kind:'auxiliary',revision:4,unchanged:false});
+  assert.deepEqual(operationCalls(m.calls)[0][2],{p_month:'2026-11',p_kind:'auxiliary',p_expected_revision:3,p_expected_actor_id:user.id,p_expected_group_id:group.id,p_expected_person_id:'p1'});
+});
+test('a manager chooses its own condition in the personal group without changing management scope',async()=>{
+  const profile=managerPersonalProfile(),m=mock({profileRow:profile,rpcResults:{save_em_dia_own_condition:{data:conditionRow({group_id:otherGroupId}),error:null}}});
+  await Cloud.create({client:m.client}).saveOwnCondition({month:'2026-11',kind:'auxiliary',expectedRevision:3});const args=operationCalls(m.calls)[0][2];assert.equal(args.p_expected_group_id,otherGroupId);assert.equal(profile.group_id,group.id);
+});
+test('condition validation and missing personal card never dispatch a write',async()=>{
+  const m=mock(),api=Cloud.create({client:m.client});await assert.rejects(api.saveOwnCondition({month:'2026-11',kind:'auxiliary',expectedRevision:3}),Cloud.AccessDeniedError);
+  await assert.rejects(api.saveOwnCondition({month:'2026-13',kind:'regular',expectedRevision:3}),Cloud.CloudError);await assert.rejects(api.saveOwnCondition({month:'2026-11',kind:'admin',expectedRevision:3}),Cloud.CloudError);await assert.rejects(api.saveOwnCondition({month:'2026-11',kind:'regular',expectedRevision:0}),Cloud.CloudError);assert.equal(operationCalls(m.calls).length,0);
+});
+test('condition confirmation cannot silently accept stale, wrong-card or wrong-kind responses',async()=>{
+  for(const row of [conditionRow({revision:5}),conditionRow({group_id:otherGroupId}),conditionRow({person_id:'p2'}),conditionRow({kind:'regular'}),conditionRow({unchanged:true})]){const m=mock({role:'publisher',rpcResults:{save_em_dia_own_condition:{data:row,error:null}}});await assert.rejects(Cloud.create({client:m.client}).saveOwnCondition({month:'2026-11',kind:'auxiliary',expectedRevision:3}),e=>e.code==='invalid_response');assert.equal(operationCalls(m.calls).length,1);}
+});
+test('condition conflicts are not retried, while exact noop keeps its revision',async()=>{
+  const m=mock({role:'publisher',rpcResults:{save_em_dia_own_condition:{data:null,error:{code:'40001'}}}});await assert.rejects(Cloud.create({client:m.client}).saveOwnCondition({month:'2026-11',kind:'auxiliary',expectedRevision:3}),Cloud.ConflictError);assert.equal(operationCalls(m.calls).length,1);
+  const noop=mock({role:'publisher',rpcResults:{save_em_dia_own_condition:{data:conditionRow({revision:3,unchanged:true}),error:null}}});assert.equal((await Cloud.create({client:noop.client}).saveOwnCondition({month:'2026-11',kind:'auxiliary',expectedRevision:3})).revision,3);
+});
+
+test('manual report carries only the captured expected condition and the server rejects stale classification',async()=>{
+ const m=mock({role:'publisher',rpcResults:{submit_em_dia_own_report:{data:null,error:{code:'40001'}}}});await assert.rejects(Cloud.create({client:m.client}).submitOwnReport({month:'2026-11',report:{...activity(),kind:'auxiliary'},expectedVersion:0}),Cloud.ConflictError);assert.equal(operationCalls(m.calls)[0][2].p_report.kind,'auxiliary');assert.equal(operationCalls(m.calls).length,1);
 });

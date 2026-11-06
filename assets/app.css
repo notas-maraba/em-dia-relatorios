@@ -469,3 +469,8 @@
 .login-card .login-preferences .help{margin:0 0 5px 30px;font-size:11px}
 .personal-mode-switch{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px}
 .personal-mode-switch .btn{padding:9px 8px;font-size:12px}
+.own-condition{padding:12px 14px}
+.own-condition .section-title{margin-bottom:0;gap:8px}
+.own-condition h2{font-size:16px;margin-top:2px;overflow-wrap:anywhere}
+.own-condition .section-title>.btn{flex:none}
+.declared-condition-note{font-size:11px;line-height:1.5;overflow-wrap:anywhere}

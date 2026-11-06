@@ -10,6 +10,7 @@ const integer=(value,min=0,max=Number.MAX_SAFE_INTEGER-1)=>Number.isSafeInteger(
 class OfflineError extends Error{constructor(message,code='offline_unavailable'){super(message);this.name='OfflineError';this.code=code;}}
 const unavailable=()=>new OfflineError('Estes dados ainda não estão disponíveis neste aparelho. Conecte-se para preparar a cópia offline.');
 const personalGroup=p=>p.personalGroupId??(p.role==='publisher'?p.defaultGroupId:null);
+const personalKind=(state,person,month)=>person.monthConditions?.[month]??state.reports?.[month]?.[person.id]?.kind??person.roles.find(r=>r.start<=month&&(!r.end||r.end>=month))?.kind??'publisher';
 // Preserve v5.0 binding keys for unchanged accounts with pending operations.
 const binding=p=>JSON.stringify([p.userId,p.role,p.defaultGroupId,p.publisherId,...(p.role!=='publisher'&&personalGroup(p)?[personalGroup(p)]:[])]);
 const dayAt=ms=>{const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(ms));return ['year','month','day'].map(key=>parts.find(p=>p.type===key).value).join('-');};
@@ -105,24 +106,40 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
     else{row.source=row.retroMinutes===null?'missing':'retroactive';row.minutes=row.retroMinutes;row.studies=row.retroStudies;row.canEditRetro=month<current;}
     cache.resources[key]={value:annual,at:stamp()};
   }
-  function versionOf(cache,key){if(key.startsWith('report:')){const month=key.slice(7);return cache.resources.card?.value.revisions.find(r=>r.month===month)?.version||0;}const value=cache.resources[key]?.value;if(!value)return 0;return key.startsWith('group:')?value.revision:value.version;}
+  function versionOf(cache,key){if(key==='card')return cache.resources.card?.value.revision||0;if(key.startsWith('report:')){const month=key.slice(7);return cache.resources.card?.value.revisions.find(r=>r.month===month)?.version||0;}const value=cache.resources[key]?.value;if(!value)return 0;return key.startsWith('group:')?value.revision:value.version;}
   function checkVersion(value,cache,key){if(!integer(value)||value!==versionOf(cache,key))throw new OfflineError('Este dado foi alterado em outra aba. Recarregue antes de continuar.','conflict');}
-  function activity(report,kind){if(!report||Object.keys(report).some(k=>!['participated','hours','studies'].includes(k))||!(report.participated===null||typeof report.participated==='boolean')||
+  function activity(report,kind){if(!report||Object.keys(report).some(k=>!['participated','hours','studies','kind'].includes(k))||!(report.participated===null||typeof report.participated==='boolean')||
     !(report.hours===null||typeof report.hours==='number'&&Number.isFinite(report.hours)&&report.hours>=0&&report.hours<=744&&Math.abs(report.hours*100-Math.round(report.hours*100))<1e-7)||
-    kind==='publisher'&&report.hours!==null||!(report.studies===null||integer(report.studies,0,9999)))throw new OfflineError('Confira os campos de atividade.','invalid_report');return clone(report);}
+    Object.hasOwn(report,'kind')&&report.kind!==kind||kind==='publisher'&&report.hours!==null||!(report.studies===null||integer(report.studies,0,9999)))throw new OfflineError('Confira os campos de atividade.','invalid_report');return clone(report);}
+  function refreshPersonalDiaries(cache){const card=cache.resources.card?.value,person=card?.state.people[0];if(!person)return;
+    for(const [key,entry] of Object.entries(cache.resources))if(key.startsWith('diary:')){const diary=clone(entry.value);diary.kind=personalKind(card.state,person,diary.month);diary.canUse=['regular','auxiliary'].includes(diary.kind);cache.resources[key]={value:diary,at:entry.at};deriveAnnual(cache,diary.month);}
+  }
+  function mirrorGroupCard(cache,groupId,state,revision){const card=cache.resources.card?.value;if(!card||card.groupId!==groupId)return false;
+    const person=state.people.find(p=>p.id===cache.profile.publisherId);if(!person)throw new Errors.AccessDeniedError();
+    const next=clone(card);next.state.people=[{id:person.id,name:person.name,startMonth:person.startMonth,endMonth:person.endMonth,notes:'',roles:clone(person.roles),...(person.monthConditions?{monthConditions:clone(person.monthConditions)}:{})}];next.state.reports={};
+    for(const [month,rows] of Object.entries(state.reports)){const report=rows[person.id];if(report)next.state.reports[month]={[person.id]:{received:report.received,kind:report.kind,participated:report.participated,hours:report.hours,studies:report.studies,notes:'',receivedDate:report.receivedDate,updatedAt:report.updatedAt}};}
+    next.revision=revision;next.state.revision=revision;next.updatedAt=state.updatedAt;cache.resources.card={value:next,at:stamp()};refreshPersonalDiaries(cache);return true;
+  }
   function project(cache,kind,payload,operationId,confirmation=null){
     const c=cache,p=c.profile,set=(key,value)=>{c.resources[key]={value:clone(value),at:stamp()};},get=key=>valueOf(c,key),version=(key,field)=>confirmation?.[field]??versionOf(c,key)+1;
     const person=()=>c.resources.card?.value.state.people[0],effects={},deps={};let result;
-    const requireVersion=(field,key)=>{if(confirmation)payload[field]=versionOf(c,key);else checkVersion(payload[field],c,key);deps[field]={resource:key,field:key.startsWith('group:')?'revision':key==='timer'?'timerVersion':key.startsWith('diary:')&&kind==='timer_post'?'hoursVersion':'version'};};
+    const requireVersion=(field,key)=>{if(confirmation)payload[field]=versionOf(c,key);else checkVersion(payload[field],c,key);deps[field]={resource:key,field:key.startsWith('group:')||key==='card'?'revision':key==='timer'?'timerVersion':key.startsWith('diary:')&&kind==='timer_post'?'hoursVersion':'version'};};
     const effect=(key,field)=>{effects[key]=field;};
     if(kind==='group_save'){
       if(p.role==='publisher'||!c.groups.some(g=>g.id===payload.groupId)||p.role==='superintendent'&&p.defaultGroupId!==payload.groupId)throw new Errors.AccessDeniedError();
       const key='group:'+payload.groupId;get(key);requireVersion('expectedRevision',key);C.validate(payload.state);const v=version(key,'revision'),state=clone(payload.state);state.revision=v;
-      result={state,revision:v,updatedAt:new Date(stamp()).toISOString(),queued:true};set(key,result);effect(key,'revision');
+      result={state,revision:v,updatedAt:new Date(stamp()).toISOString(),queued:true};set(key,result);effect(key,'revision');if(mirrorGroupCard(c,payload.groupId,state,v))effect('card','revision');
     }else{
       if(!p.publisherId||payload.groupId!==personalGroup(p)||payload.personId!==p.publisherId)throw new Errors.AccessDeniedError();
       const today=dayAt(stamp()),current=today.slice(0,7),own=person();if(!own)throw unavailable();
-      if(kind==='diary_launch'){
+      if(kind==='month_condition'){
+        if(!C.validMonth(payload.month)||payload.month>current||!['publisher','regular','auxiliary'].includes(payload.conditionKind)||!C.inPeriod(own,payload.month)&&!C.getReport(c.resources.card.value.state,own.id,payload.month))throw new OfflineError('Escolha um mês e uma condição válidos.','invalid_month');
+        requireVersion('expectedRevision','card');const card=get('card'),nextPerson=C.withMonthCondition(own,payload.month,payload.conditionKind),unchanged=equal(nextPerson,own),v=confirmation?.revision??(card.revision+(unchanged?0:1));
+        card.state.people[0]=nextPerson;card.revision=v;card.state.revision=v;if(!unchanged)card.updatedAt=card.state.updatedAt=new Date(stamp()).toISOString();set('card',card);effect('card','revision');
+        const groupKey='group:'+personalGroup(p),group=c.resources[groupKey]?.value;if(group){const next=clone(group),person=next.state.people.find(x=>x.id===p.publisherId);if(!person)throw new Errors.AccessDeniedError();person.roles=clone(nextPerson.roles);person.monthConditions=clone(nextPerson.monthConditions);next.revision=v;next.state.revision=v;next.updatedAt=next.state.updatedAt=card.updatedAt;set(groupKey,next);effect(groupKey,'revision');}
+        refreshPersonalDiaries(c);deriveAnnual(c,payload.month);result={groupId:personalGroup(p),personId:p.publisherId,month:payload.month,kind:payload.conditionKind,revision:v,unchanged,queued:true};
+      }else if(kind==='diary_launch'){
+
         if(!uuid(payload.id)||typeof payload.date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(payload.date)||new Date(payload.date+'T12:00:00Z').toISOString().slice(0,10)!==payload.date||payload.date>today||!(payload.minutes===null||integer(payload.minutes,0,C.DIARY_LIMITS.maxMinutes))||!(payload.note===null||typeof payload.note==='string'&&payload.note.length<=C.DIARY_LIMITS.maxNoteLength))throw new OfflineError('Confira o lançamento.','invalid_input');
         const key='diary:'+payload.date.slice(0,7),diary=get(key);if(!['regular','auxiliary'].includes(diary.kind))throw new OfflineError('Este mês não é de pioneiro.','invalid_input');requireVersion('expectedVersion',key);
         const old=diary.launches.find(x=>x.id===payload.id);if(old&&old.date!==payload.date)throw new OfflineError('A data do lançamento deve ser preservada.','invalid_input');
@@ -132,12 +149,13 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
         diary.version=version(key,'version');diary.updatedAt=new Date(stamp()).toISOString();result={...diary,unchanged:false,queued:true};set(key,diary);deriveAnnual(c,diary.month);effect(key,'version');
       }else if(['report_manual','report_diary'].includes(kind)){
         const month=payload.month;if(!C.validMonth(month)||month>current||!C.inPeriod(own,month)&&!C.getReport(c.resources.card.value.state,own.id,month))throw new OfflineError('Este mês não está disponível.','invalid_month');
-        const key='report:'+month,diary=kind==='report_diary'?get('diary:'+month):null,ownKind=C.kindAt(c.resources.card.value.state,own,month);
+        const key='report:'+month,diary=kind==='report_diary'?get('diary:'+month):null,ownKind=personalKind(c.resources.card.value.state,own,month);
+        if(payload.conditionKind!==undefined&&payload.conditionKind!==ownKind||payload.conditionKind===undefined&&own.monthConditions?.[month])throw new OfflineError('A condição do mês mudou. Confira antes de enviar.','conflict');
         requireVersion(kind==='report_diary'?'expectedReportVersion':'expectedVersion',key);
         let report;if(diary){requireVersion('expectedHoursVersion','diary:'+month);if(!diary.launches.length||!['regular','auxiliary'].includes(diary.kind))throw new OfflineError('Registre as horas antes de enviar.','invalid_input');report=activity({participated:diary.totalMinutes>0?true:payload.participated,hours:Math.round(diary.totalMinutes/60*100)/100,studies:payload.studies},ownKind);}
         else report=activity(payload.report,ownKind);
         const v=version(key,'version'),card=get('card'),prior=card.revisions.find(x=>x.month===month);card.revisions=card.revisions.filter(x=>x.month!==month);card.revisions.push({id:prior?.id||operationId,month,status:confirmation?.status||'queued',version:v,report:{...report,kind:ownKind,received:true},submittedAt:new Date(stamp()).toISOString(),reviewedAt:null});
-        if(confirmation?.status==='accepted'){card.state.reports[month]??={};card.state.reports[month][own.id]={...report,kind:ownKind,received:true,notes:'',receivedDate:today,updatedAt:new Date(stamp()).toISOString()};}if(confirmation?.revision){card.revision=confirmation.revision;card.state.revision=confirmation.revision;}set('card',card);deriveAnnual(c,month);
+        if(confirmation?.status==='accepted'){card.state.reports[month]??={};card.state.reports[month][own.id]={...report,kind:ownKind,received:true,notes:'',receivedDate:today,updatedAt:new Date(stamp()).toISOString()};}if(confirmation?.revision){card.revision=confirmation.revision;card.state.revision=confirmation.revision;}set('card',card);effect('card','revision');if(confirmation?.revision){const key='group:'+personalGroup(p),group=c.resources[key]?.value;if(group){const updated=clone(group);updated.revision=confirmation.revision;updated.state.revision=confirmation.revision;if(confirmation.status==='accepted'){updated.state.reports[month]??={};updated.state.reports[month][own.id]=clone(card.state.reports[month][own.id]);}set(key,updated);}}deriveAnnual(c,month);
         result={status:'queued',version:v,groupId:personalGroup(p),personId:p.publisherId,month,revision:card.revision,queued:true,...(diary?{hoursVersion:diary.version,totalMinutes:diary.totalMinutes}:{})};effect(key,'version');
       }else if(['annual_goal','annual_retro'].includes(kind)){
         if(!Number.isInteger(payload.serviceYear)||payload.serviceYear<1900||payload.serviceYear>2198||payload.serviceYear>C.serviceYearForMonth(current))throw new OfflineError('Ano inválido.','invalid_input');
@@ -148,7 +166,7 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
       }else if(kind==='timer_change'){
         const key='timer',timer=get(key);requireVersion('expectedVersion',key);if(!uuid(payload.timerId)||!['start','pause','resume','stop','discard'].includes(payload.action)||!integer(payload.elapsedMs)||!Number.isFinite(Date.parse(payload.at)))throw new OfflineError('Cronômetro inválido.','invalid_input');
         const states={start:'idle',pause:'running',resume:'paused',stop:timer.status,discard:'stopped'};if(timer.status!==states[payload.action]||payload.action==='stop'&&!['running','paused'].includes(timer.status)||payload.action!=='start'&&timer.timerId!==payload.timerId)throw new OfflineError('Atualize o cronômetro.','conflict');
-        if(payload.action==='start'&&(!C.inPeriod(own,current)||!['regular','auxiliary'].includes(C.kindAt(c.resources.card.value.state,own,current))))throw new OfflineError('Inicie em um mês de pioneiro.','invalid_input');
+        if(payload.action==='start'&&(!C.inPeriod(own,current)||!['regular','auxiliary'].includes(personalKind(c.resources.card.value.state,own,current))))throw new OfflineError('Inicie em um mês de pioneiro.','invalid_input');
         const next={...timer,version:version(key,'timerVersion'),serverNow:payload.at};
         if(payload.action==='start')Object.assign(next,{timerId:payload.timerId,status:'running',startDate:dayAt(Date.parse(payload.at)),startedAt:payload.at,anchorAt:payload.at,stoppedAt:null,accumulatedMs:0,elapsedMs:0});
         else if(payload.action==='discard')Object.assign(next,{timerId:null,status:'idle',startDate:null,startedAt:null,anchorAt:null,stoppedAt:null,accumulatedMs:0,elapsedMs:0});
@@ -156,6 +174,7 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
         else Object.assign(next,{status:payload.action==='pause'?'paused':'stopped',anchorAt:null,elapsedMs:payload.elapsedMs,accumulatedMs:payload.elapsedMs,stoppedAt:payload.action==='stop'?payload.at:null});
         set(key,next);c.resources[key].at=Date.parse(payload.at);result={...next,unchanged:false,queued:true};effect(key,'timerVersion');
       }else if(kind==='timer_post'){
+        const chosen=get('diary:'+String(payload.date).slice(0,7));if(payload.conditionKind!==undefined&&payload.conditionKind!==chosen.kind||payload.conditionKind===undefined&&own.monthConditions?.[String(payload.date).slice(0,7)])throw new OfflineError('A condição do mês mudou. Confira antes de lançar.','conflict');
         const timer=get('timer');requireVersion('expectedTimerVersion','timer');if(timer.status!=='stopped'||timer.timerId!==payload.timerId)throw new OfflineError('Pare o cronômetro antes de lançar.','conflict');
         const key='diary:'+String(payload.date).slice(0,7);requireVersion('expectedHoursVersion',key);
         if(get(key).launches.some(item=>item.id===payload.launchId))throw new OfflineError('Identificador de lançamento já usado.','conflict');
@@ -169,8 +188,10 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
     let row=await ensure();if(!row){await ready();row=active;}if(!row)throw unavailable();if(row.blocked)throw new Errors.AccessDeniedError();const userId=row.userId,operationId=id();let output;
     const payload={...clone(args),userId,groupId:kind==='group_save'?args.groupId:personalGroup(row.cache.profile),personId:kind==='group_save'?null:row.cache.profile.publisherId};
     const saved=await transact(userId,current=>{if(!current||current.binding!==row.binding||current.blocked)throw new Errors.AccessDeniedError();
-      const cache=clone(current.cache),projected=project(cache,kind,payload,operationId),dependencies={};
-      for(const [field,dep] of Object.entries(projected.deps)){const previous=current.tails[dep.resource];if(previous)dependencies[field]={operationId:previous.operationId,field:previous.field};}
+      if(kind==='group_save'&&current.outbox.some(op=>['report_manual','report_diary'].includes(op.kind)&&op.payload.groupId===args.groupId))throw new OfflineError('Sincronize os relatórios pessoais pendentes antes de salvar alterações na administração deste grupo. O formulário e a fila foram preservados.','pending_personal_reports');
+      const cache=clone(current.cache);if(['report_manual','report_diary','timer_post'].includes(kind)){const card=cache.resources.card?.value;if(!card)throw new Errors.AccessDeniedError();const month=kind==='timer_post'?String(args.date).slice(0,7):args.month;payload.conditionKind=(kind==='report_manual'?args.report?.kind:args.expectedKind)??personalKind(card.state,card.state.people[0],month);delete payload.expectedKind;}
+      const projected=project(cache,kind,payload,operationId),dependencies={};
+      for(const [field,dep] of Object.entries(projected.deps)){const previous=current.tails[dep.resource]||(dep.resource==='card'?current.tails['group:'+personalGroup(cache.profile)]:null);if(previous)dependencies[field]={operationId:previous.operationId,field:previous.field};}
       current.cache=cache;current.generation=(current.generation||0)+1;const op={id:operationId,kind,payload,dependencies,effects:projected.effects,state:'queued',createdAt:new Date(stamp()).toISOString(),resolved:null};current.outbox.push(op);
       for(const [resource,field] of Object.entries(projected.effects))current.tails[resource]={operationId,field};output=projected.result;return current;
     });if(!await still(userId))throw new Errors.AuthRequiredError();active=saved;lastError=null;notify();if(isOnline())setTimeout(()=>{sync().catch(()=>{});},0);return clone(output);
@@ -236,13 +257,14 @@ function create({cloud,core:C,indexedDB,identity,online=()=>true,now=()=>Date.no
     groups:async()=>{const row=await ensure();if(!row||row.blocked)throw unavailable();return clone(row.cache.groups);},
     read:groupId=>readResource('group:'+groupId),readOwnCard:()=>readResource('card'),readOwnHours:month=>readResource('diary:'+month),readOwnAnnual:year=>readResource('annual:'+year),readOwnTimer:()=>readResource('timer'),listRevisions:groupId=>readResource('revisions:'+groupId),
     save:(state,expectedRevision,groupId)=>enqueue('group_save',{state,expectedRevision,groupId}),
+    saveOwnCondition:args=>enqueue('month_condition',{month:args.month,conditionKind:args.kind,expectedRevision:args.expectedRevision}),
     saveOwnHoursLaunch:args=>enqueue('diary_launch',{id:args.id,date:args.date,minutes:args.minutes,note:args.note??null,expectedVersion:args.expectedVersion}),
     submitOwnReport:args=>enqueue('report_manual',{month:args.month,report:args.report,expectedVersion:args.expectedVersion}),
-    submitOwnHours:args=>enqueue('report_diary',{month:args.month,participated:args.participated,studies:args.studies,expectedHoursVersion:args.expectedHoursVersion,expectedReportVersion:args.expectedReportVersion}),
+    submitOwnHours:args=>enqueue('report_diary',{month:args.month,participated:args.participated,studies:args.studies,expectedHoursVersion:args.expectedHoursVersion,expectedReportVersion:args.expectedReportVersion,expectedKind:args.expectedKind??null}),
     saveOwnAnnualGoal:args=>enqueue('annual_goal',{serviceYear:args.serviceYear,targetMinutes:args.targetMinutes,expectedVersion:args.expectedVersion}),
     saveOwnAnnualRetro:args=>enqueue('annual_retro',{serviceYear:args.serviceYear,month:args.month,minutes:args.minutes,studies:args.studies,expectedVersion:args.expectedVersion}),
     changeOwnTimer:async args=>{const timer=await readResource('timer');return enqueue('timer_change',{action:args.action,timerId:args.timerId,expectedVersion:args.expectedVersion,at:new Date(stamp()).toISOString(),elapsedMs:args.action==='discard'||args.action==='start'?0:args.action==='resume'?timer.accumulatedMs:timer.elapsedMs});},
-    postOwnTimer:args=>enqueue('timer_post',{timerId:args.timerId,expectedTimerVersion:args.expectedTimerVersion,launchId:args.launchId,date:args.date,minutes:args.minutes,note:args.note??'',expectedHoursVersion:args.expectedHoursVersion}),
+    postOwnTimer:args=>enqueue('timer_post',{timerId:args.timerId,expectedTimerVersion:args.expectedTimerVersion,launchId:args.launchId,date:args.date,minutes:args.minutes,note:args.note??'',expectedHoursVersion:args.expectedHoursVersion,expectedKind:args.expectedKind??null}),
     logout:logoutSafe,subscribeAuth:fn=>{authListeners.add(fn);const stop=cloud.subscribeAuth?.((event,session)=>{if(event==='SIGNED_OUT'){active=null;notify();}fn(event,session);});return()=>{authListeners.delete(fn);stop?.();};}
   };
   for(const method of ['createGroup','transferGroups','transferPublisher','publisherAccounts','listUsers','createUser','assignUser','createPublisherUser','listPersonalBindings','bindPersonalCard'])api[method]=(...args)=>onlineOnly(method,args);
