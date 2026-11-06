@@ -33,7 +33,7 @@ function harness(overrides={},options={}) {
     groups:async()=>defaultGroups,listRevisions:async()=>({revisions:[],total:0}),publisherAccounts:async()=>[],transferGroups:async()=>defaultGroups,createPublisherUser:async()=>({userId:'publisher_user'}),transferPublisher:async()=>({}),readOwnHours:async month=>hoursBundle(month),
     createGroup:async name=>({id:'group_c',name}),listUsers:async()=>({users:[]}),createUser:async()=>({ok:true}),assignUser:async()=>({ok:true}),read:async()=>({state:fixture(),revision:7,updatedAt:null}),
     save:async state=>({state,revision:8,updatedAt:null}),login:async()=>({sent:true}),loginPassword:async()=>({signedIn:true}),
-    readOwnTimer:async()=>timerBundle(),logout:async()=>{},subscribeAuth(fn){authCallback=fn;return()=>{};},...overrides};
+    readOwnTimer:async()=>timerBundle(),readOwnAnnual:async year=>annualBundle(year),logout:async()=>{},subscribeAuth(fn){authCallback=fn;return()=>{};},...overrides};
   const originalSave=cloud.save;cloud.save=(...args)=>{saveCalls++;return originalSave(...args);};
   const window={EmDiaCore:options.core||C,EMDIA_CLOUD_CONFIG:{url:'https://example.invalid',publishableKey:'test-public-key'},
     supabase:{createClient:()=>({})},EmDiaCloud:{...errors,create:()=>cloud},
@@ -517,6 +517,8 @@ function launchIdForDate(date){return '10000000-0000-4000-8000-'+date.replaceAll
 function freshLaunchId(index){return '20000000-0000-4000-8000-'+String(index).padStart(12,'0');}
 function timerBundle(changes={}){return {groupId:'group_a',personId:'p_fixture',timerId:null,status:'idle',version:0,startDate:null,startedAt:null,anchorAt:null,stoppedAt:null,accumulatedMs:0,elapsedMs:0,serverNow:new Date().toISOString(),...changes};}
 function activeTimer(status='running',changes={}){return timerBundle({timerId:freshLaunchId(501),status,version:1,startDate:testToday(),startedAt:new Date().toISOString(),anchorAt:status==='running'?new Date().toISOString():null,stoppedAt:status==='stopped'?new Date().toISOString():null,elapsedMs:65000,accumulatedMs:status==='running'?0:65000,...changes});}
+function annualBundle(serviceYear=C.serviceYearForMonth(testToday().slice(0,7)),changes={}){const current=testToday().slice(0,7);return {groupId:'group_a',personId:'p_fixture',serviceYear,today:testToday(),targetMinutes:36000,version:0,updatedAt:null,months:C.periodMonths(serviceYear,'service').map(month=>({month,kind:'regular',source:month>current?'future':'missing',minutes:null,studies:null,retroMinutes:null,retroStudies:null,canEditRetro:month<current})),...changes};}
+function annualRows(year,overrides={},changes={}){const bundle=annualBundle(year,changes);bundle.months=bundle.months.map(row=>({...row,...overrides[row.month]}));return bundle;}
 function hoursBundle(month,entries={},changes={}) {
   return {groupId:'group_a',personId:'p_fixture',month,kind:'regular',entries:{...entries},version:Object.keys(entries).length?1:0,
     totalMinutes:Object.values(entries).reduce((total,value)=>total+value,0),closed:month<testToday().slice(0,7),today:testToday(),updatedAt:null,
@@ -1201,4 +1203,122 @@ test('unposted running time never enters the monthly goal or received activity',
   const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async()=>hoursBundle(month,{[date]:60}),readOwnTimer:async()=>activeTimer('running',{elapsedMs:30*3600000})},{now:Date.now()});await flush();
   assert.match(h.element('#app').innerHTML,/30:00:00/);assert.match(monthlyGoalMarkup(h),/1h00|49h00/);assert.doesNotMatch(monthlyGoalMarkup(h),/31h00|19h00|30h00/);h.advance(3600000);assert.equal(h.element('#own-timer-elapsed').textContent,'31:00:00');assert.match(monthlyGoalMarkup(h),/1h00|49h00/);
   assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,55);assert.equal(h.saveCalls(),0);
+});
+
+test('only regular publishers see annual progress while the central send action has its own plane button',async()=>{
+  for(const kind of ['regular','auxiliary','publisher']){
+    const data=kind==='publisher'?fixture():pioneerFixture(kind);let reads=0;
+    const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnAnnual:async year=>{reads++;return annualBundle(year);}});await flush();
+    const html=h.element('#app').innerHTML,nav=h.element('#mobile-nav').innerHTML;
+    assert.equal(html.includes('data-action="annual-open"'),kind==='regular');assert.match(nav,/data-action="own-send" data-id="send"[^>]*publisher-send/);
+    assert.ok(nav.indexOf('Meu cartão')<nav.indexOf('Enviar'));assert.ok(nav.indexOf('Enviar')<nav.indexOf('Meus relatórios'));assert.equal(reads,0);
+    if(kind==='regular'){assert.ok(html.indexOf('Conferir e enviar o mês')<html.indexOf('Progresso anual'));h.click('annual-open');await flush();assert.equal(reads,1);assert.match(h.element('#app').innerHTML,/Progresso anual/);}
+  }
+});
+
+test('annual service years switch at September without changing the selected activity month',async()=>{
+  const data=pioneerFixture(),year=C.serviceYearForMonth(testToday().slice(0,7)),reads=[];
+  data.people[0].startMonth=(year-1)+'-09';data.people[0].roles[0].start=data.people[0].startMonth;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnAnnual:async selected=>{reads.push(selected);return annualBundle(selected);}});await flush();
+  await h.change('active-month',year+'-08');await flush();h.click('annual-open');await flush();assert.equal(h.window.EmDiaApp.getUI().annualYear,year-1);assert.match(h.element('#app').innerHTML,new RegExp((year-1)+'/'+year));
+  const selectedMonth=h.window.EmDiaApp.getUI().month;await h.change('annual-service-year',String(year));await flush();assert.equal(h.window.EmDiaApp.getUI().month,selectedMonth);assert.equal(h.window.EmDiaApp.getUI().annualYear,year);
+  assert.match(h.element('#app').innerHTML,new RegExp('id="annual-service-year"[^>]*max="'+year+'"'));await h.change('annual-service-year',String(year+1));await flush();assert.equal(h.window.EmDiaApp.getUI().annualYear,year);assert.deepEqual(reads,[year-1,year]);
+});
+
+test('annual rows display one authoritative source, partial totals and explicit zero without summing hidden history',async()=>{
+  const data=pioneerFixture(),year=C.serviceYearForMonth(testToday().slice(0,7))-1,months=C.periodMonths(year,'service');
+  const bundle=annualRows(year,{[months[0]]:{source:'approved',minutes:120,studies:3,retroMinutes:900,retroStudies:9,canEditRetro:false},[months[1]]:{source:'diary',minutes:60,studies:null,retroMinutes:600,retroStudies:8,canEditRetro:false},[months[2]]:{source:'retroactive',minutes:0,studies:0,retroMinutes:0,retroStudies:0}});
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnAnnual:async selected=>selected===year?bundle:annualBundle(selected)});await flush();h.click('annual-open');await flush();await h.change('annual-service-year',String(year));await flush();
+  const html=h.element('#app').innerHTML;assert.equal((html.match(/class="annual-month"/g)||[]).length,12);assert.match(html,/Relatório recebido|Diário pessoal|Histórico pessoal/);assert.match(html,/Registradas<\/span><strong>3h00/);assert.doesNotMatch(html,/15h00|10h00|28h00/);
+  assert.match(html,/Horas: <strong>0h00<\/strong>/);assert.match(html,/Estudos: <strong>0<\/strong>/);assert.match(html,/Horas: <strong>Não informado/);assert.match(html,/totais são parciais/);assert.match(html,/Soma dos estudos por mês: 3/);assert.equal(h.saveCalls(),0);
+});
+
+test('annual targets save only the selected card-year and retain the monthly reference',async()=>{
+  const data=pioneerFixture(),year=C.serviceYearForMonth(testToday().slice(0,7));let payload;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnAnnual:async selected=>annualBundle(selected,{version:4}),saveOwnAnnualGoal:async value=>{payload=C.clone(value);return annualBundle(year,{version:5,targetMinutes:value.targetMinutes});}});await flush();h.click('annual-open');await flush();h.click('annual-goal');
+  assert.match(h.element('#modal').innerHTML,/somente para seu cartão|50 horas permanece/);await h.submit('modal-form',{hours:'600',minutes:'30'});await flush();
+  assert.deepEqual(payload,{serviceYear:year,targetMinutes:36030,expectedVersion:4});assert.match(h.element('#app').innerHTML,/600h30/);assert.equal(C.REGULAR_PIONEER_TARGETS.monthlyHours,50);assert.doesNotMatch(JSON.stringify(h.window.EmDiaApp.getState()),/targetMinutes|retroMinutes/);assert.equal(h.saveCalls(),0);
+});
+
+test('annual goal validation and failed saves preserve the draft and block unconfirmed retries',async()=>{
+  const data=pioneerFixture();let writes=0,reads=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnAnnual:async year=>{reads++;return annualBundle(year);},saveOwnAnnualGoal:async()=>{writes++;throw new errors.ConflictError();}});await flush();h.click('annual-open');await flush();h.click('annual-goal');h.element('#annual-target-hours').value='650';h.input();
+  for(const fields of [{hours:'',minutes:''},{hours:'0',minutes:'0'},{hours:'8928',minutes:'1'},{hours:'1.5'},{hours:'1',minutes:'60'}]){await h.submit('modal-form',fields);assert.equal(writes,0);}
+  await h.submit('modal-form',{hours:'650',minutes:'0'});await flush();assert.equal(writes,1);assert.equal(h.element('#modal').open,true);assert.equal(h.element('#annual-target-hours').value,'650');assert.match(h.element('#form-error').textContent,/Preserve o que digitou/);
+  await h.submit('modal-form',{hours:'650',minutes:'0'});assert.equal(writes,1);h.confirm(false);h.click('annual-refresh');await h.change('annual-service-year',String(h.window.EmDiaApp.getUI().annualYear-1));h.click('annual-back');h.click('help');await flush();assert.equal(reads,1);assert.equal(h.element('#modal').open,true);assert.equal(h.window.EmDiaApp.getUI().tab,'annual-progress');assert.equal(h.saveCalls(),0);
+});
+
+test('retroactive zero hours and studies before tracking are private and can be removed independently',async()=>{
+  const data=pioneerFixture(),year=C.serviceYearForMonth(testToday().slice(0,7))-1,month=year+'-09',payloads=[];let version=0,minutes=null,studies=null,reportWrites=0,diaryWrites=0;
+  data.people[0].startMonth=testToday().slice(0,7);const originalStart=data.people[0].startMonth;
+  const bundle=()=>annualRows(year,{[month]:minutes===null?{}:{source:'retroactive',minutes,studies,retroMinutes:minutes,retroStudies:studies}},{version});
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnAnnual:async selected=>selected===year?bundle():annualBundle(selected),saveOwnAnnualRetro:async value=>{payloads.push(C.clone(value));minutes=value.minutes;studies=value.studies;version++;return bundle();},submitOwnReport:async()=>{reportWrites++;},saveOwnHoursLaunch:async()=>{diaryWrites++;}});await flush();h.click('annual-open');await flush();await h.change('annual-service-year',String(year));await flush();h.click('annual-retro',month);
+  assert.match(h.element('#modal').innerHTML,/pessoal e privado|envio é uma etapa separada/);await h.submit('modal-form',{hours:'',minutes:'',studies:'0'});assert.equal(payloads.length,0);
+  await h.submit('modal-form',{hours:'0',minutes:'0',studies:'0'});await flush();assert.deepEqual(payloads[0],{serviceYear:year,month,minutes:0,studies:0,expectedVersion:0});assert.match(h.element('#app').innerHTML,/Histórico pessoal|0h00/);
+  h.click('annual-retro',month);h.confirm(false);await h.submit('modal-form',{},'remove');assert.equal(payloads.length,1);h.confirm(true);await h.submit('modal-form',{},'remove');await flush();assert.deepEqual(payloads[1],{serviceYear:year,month,minutes:null,studies:null,expectedVersion:1});
+  assert.equal(h.window.EmDiaApp.getState().people[0].startMonth,originalStart);assert.deepEqual(h.window.EmDiaApp.getState().reports,{});assert.equal(reportWrites,0);assert.equal(diaryWrites,0);assert.equal(h.saveCalls(),0);
+});
+
+test('received and diary months cannot be overwritten through retroactive controls',async()=>{
+  const data=pioneerFixture(),year=C.serviceYearForMonth(testToday().slice(0,7))-1,month=year+'-09';let writes=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnAnnual:async selected=>annualRows(selected,selected===year?{[month]:{source:'approved',minutes:90,studies:1,canEditRetro:false}}:{}),saveOwnAnnualRetro:async()=>{writes++;}});await flush();h.click('annual-open');await flush();await h.change('annual-service-year',String(year));await flush();h.click('annual-retro',month);await flush();assert.equal(h.element('#modal').open,false);assert.equal(writes,0);assert.equal(h.saveCalls(),0);
+});
+
+test('annual late reads, foreign bundles and late writes cannot reopen signed-out records',async()=>{
+  const data=pioneerFixture(),year=C.serviceYearForMonth(testToday().slice(0,7)),pending=deferred();
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnAnnual:()=>pending.promise});await flush();h.click('annual-open');await flush();h.auth('SIGNED_OUT',null);pending.resolve(annualBundle(year));await flush();assert.equal(h.window.EmDiaApp.getState(),null);assert.doesNotMatch(h.element('#app').innerHTML,/Meta do ano de serviço/);
+  for(const changes of [{personId:'p_foreign'},{groupId:'group_foreign'},{serviceYear:year-1},{months:[]}]){const invalid=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnAnnual:async()=>annualBundle(year,changes)});await flush();invalid.click('annual-open');await flush();assert.match(invalid.element('#app').innerHTML,/Não foi possível carregar o progresso anual/);assert.doesNotMatch(invalid.element('#app').innerHTML,/annual-months/);}
+  const write=deferred(),out=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),saveOwnAnnualGoal:()=>write.promise});await flush();out.click('annual-open');await flush();out.click('annual-goal');const save=out.submit('modal-form',{hours:'650',minutes:'0'});out.auth('SIGNED_OUT',null);write.resolve(annualBundle(year,{version:1,targetMinutes:39000}));await save;await flush();assert.equal(out.element('#modal').innerHTML,'');assert.doesNotMatch(out.element('#app').innerHTML,/650h00|Progresso anual/);
+});
+
+test('switching annual years ignores stale responses and protects drafts when discard is cancelled',async()=>{
+  const data=pioneerFixture(),year=C.serviceYearForMonth(testToday().slice(0,7)),pending=deferred();let wait=true;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnAnnual:selected=>selected===year&&wait?pending.promise:Promise.resolve(annualBundle(selected))});await flush();h.click('annual-open');await flush();await h.change('annual-service-year',String(year-1));await flush();pending.resolve(annualBundle(year,{targetMinutes:30000}));await flush();assert.equal(h.window.EmDiaApp.getUI().annualYear,year-1);assert.doesNotMatch(h.element('#app').innerHTML,/500h00/);
+  h.click('annual-goal');h.input();h.confirm(false);await h.change('annual-service-year',String(year));assert.equal(h.window.EmDiaApp.getUI().annualYear,year-1);assert.equal(h.element('#modal').open,true);wait=false;
+});
+
+test('central normal sending preserves the explicit diary choice and existing approval workflow',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth,date=month+'-01';let payload;
+  data.reports[month]={p_fixture:report({kind:'regular',hours:55,studies:4})};
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>hoursBundle(requested,requested===month?{[date]:90}:{},{version:requested===month?7:0}),submitOwnHours:async value=>{payload=C.clone(value);return{status:'pending',version:1,hoursVersion:7,totalMinutes:90};}});await flush();await h.change('active-month',month);await flush();h.click('own-send');await flush();
+  assert.match(h.element('#modal').innerHTML,/Usar total do diário|Informar total do mês/);assert.match(h.element('#modal').innerHTML,new RegExp(C.monthLabel(month)));h.click('own-send-normal','diary');assert.match(h.element('#modal').innerHTML,/1h30/);assert.equal(payload,undefined);
+  await h.submit('modal-form',{studies:'5'});await flush();assert.deepEqual(payload,{month,participated:true,studies:5,expectedHoursVersion:7,expectedReportVersion:0});assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,55);assert.equal(h.saveCalls(),0);
+});
+
+test('central ordinary publishers can send the current month while pioneers keep the normal closure guard',async()=>{
+  const current=testToday().slice(0,7);let payload,pioneerWrites=0;
+  const common=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle(),submitOwnReport:async value=>{payload=C.clone(value);return{status:'accepted',version:1};}});await flush();await common.change('active-month',current);await flush();common.click('own-send');await flush();common.click('own-send-normal','manual');await common.submit('modal-form',{participated:'yes',studies:'0'});await flush();assert.equal(payload.month,current);assert.equal(payload.report.hours,null);assert.equal(payload.report.studies,0);
+  const data=pioneerFixture(),pioneer=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),submitOwnReport:async()=>{pioneerWrites++;}});await flush();pioneer.click('own-send');await flush();assert.match(pioneer.element('#modal').innerHTML,/mês está em andamento|data-action="own-send-normal" data-id="manual" disabled/);pioneer.click('own-send-normal','manual');await flush();assert.equal(pioneerWrites,0);pioneer.click('own-whatsapp');assert.match(pioneer.element('#modal').innerHTML,/Mês em andamento: confira os totais até agora/);
+});
+
+test('WhatsApp confirmation uses only the selected month and never sends or shares private diary observations',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth,date=month+'-01',writes=[];data.reports[month]={p_fixture:report({kind:'regular',hours:55,studies:4})};
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>launchBundle(requested,requested===month?[{id:freshLaunchId(701),date,minutes:90,note:'Observação nunca compartilhada'}]:[]),submitOwnReport:async value=>{writes.push(value);},submitOwnHours:async value=>{writes.push(value);}});await flush();await h.change('active-month',month);await flush();h.click('own-send');await flush();h.click('own-whatsapp');
+  assert.match(h.element('#modal').innerHTML,/Relatório recebido|Total salvo no diário/);assert.match(h.element('#modal').innerHTML,/name="hours"[^>]*value="55"/);await h.change('own-share-source','diary');assert.match(h.element('#modal').innerHTML,/name="hours"[^>]*value="1"/);assert.match(h.element('#modal').innerHTML,/name="minutes"[^>]*value="30"/);
+  await h.submit('modal-form',{hours:'1',minutes:'35',studies:'2'});await flush();const html=h.element('#modal').innerHTML;assert.match(html,/Prezado irmão|01:35h/);assert.match(html,new RegExp(C.monthLabel(month)));assert.doesNotMatch(html,/Observação nunca compartilhada/);assert.match(html,/href="https:\/\/wa.me\/\?text=/);assert.match(html,/target="_blank" rel="noopener noreferrer"/);assert.deepEqual(writes,[]);
+  let copied='';h.navigator.clipboard={writeText:async text=>{copied=text;}};h.click('own-whatsapp-copy');await flush();assert.match(copied,/01:35h/);assert.doesNotMatch(copied,/Observação nunca compartilhada/);assert.equal(h.window.EmDiaApp.getState().reports[month].p_fixture.hours,55);assert.equal(h.saveCalls(),0);
+});
+
+test('ordinary WhatsApp text requires explicit participation and studies, including zero',async()=>{
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle()});await flush();h.click('own-whatsapp');
+  await h.submit('modal-form',{studies:'0'});assert.match(h.element('#form-error').textContent,/Informe se participou/);await h.submit('modal-form',{participated:'no',studies:''});assert.match(h.element('#form-error').textContent,/Informe os estudos/);
+  await h.submit('modal-form',{participated:'no',studies:'0'});await flush();assert.match(h.element('#modal').innerHTML,/- Participou no ministério\?\nNão/);assert.match(h.element('#modal').innerHTML,/- Tem estudos bíblicos\?\nNão/);assert.doesNotMatch(h.element('#modal').innerHTML,/- Horas:/);assert.equal(h.saveCalls(),0);
+});
+
+test('personal history before tracking can prepare regular WhatsApp text but cannot be sent normally',async()=>{
+  const data=pioneerFixture(),year=C.serviceYearForMonth(testToday().slice(0,7))-1,month=year+'-09';data.people[0].startMonth=testToday().slice(0,7);data.people[0].roles[0].start=data.people[0].startMonth;let reports=0;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnAnnual:async selected=>annualRows(selected,selected===year?{[month]:{source:'retroactive',minutes:3300,studies:4,retroMinutes:3300,retroStudies:4}}:{}),submitOwnReport:async()=>{reports++;}});await flush();h.click('annual-open');await flush();await h.change('annual-service-year',String(year));await flush();h.click('annual-back');await flush();await h.change('active-month',month);await flush();h.click('own-send');await flush();assert.match(h.element('#modal').innerHTML,/fora do período de acompanhamento/);assert.doesNotMatch(h.element('#modal').innerHTML,/Usar histórico pessoal/);h.click('own-send-normal','retro');await flush();assert.equal(reports,0);
+  h.click('own-whatsapp');assert.match(h.element('#modal').innerHTML,/Histórico pessoal|Pioneiro regular/);assert.match(h.element('#modal').innerHTML,/name="hours"[^>]*value="55"/);await h.submit('modal-form',{hours:'55',minutes:'0',studies:'4'});await flush();assert.match(h.element('#modal').innerHTML,/- Horas: 55:00h/);assert.equal(reports,0);assert.equal(h.saveCalls(),0);
+});
+
+test('choosing loaded personal history for a tracked month still requires the normal report confirmation',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth,year=C.serviceYearForMonth(month);let payload;
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnAnnual:async selected=>annualRows(selected,{[month]:{source:'retroactive',minutes:3300,studies:4,retroMinutes:3300,retroStudies:4}}),submitOwnReport:async value=>{payload=C.clone(value);return{status:'accepted',version:1};}});await flush();h.click('annual-open');await flush();h.click('annual-back');await flush();await h.change('active-month',month);await flush();h.click('own-send');await flush();assert.match(h.element('#modal').innerHTML,/Usar histórico pessoal/);h.click('own-send-normal','retro');assert.equal(payload,undefined);assert.match(h.element('#modal').innerHTML,/Dados iniciais do histórico pessoal/);assert.match(h.element('#modal').innerHTML,/id="own-hours"[^>]*value="55"/);
+  await h.submit('modal-form',{hours:'55',participated:'yes',studies:'4'});await flush();assert.equal(payload.month,month);assert.equal(payload.report.hours,55);assert.equal(payload.report.studies,4);assert.equal(h.saveCalls(),0);
+});
+
+test('WhatsApp drafts survive cancelled source or month changes and prepared text disappears on sign-out',async()=>{
+  const data=pioneerFixture(),month=data.activeMonth;data.reports[month]={p_fixture:report({kind:'regular',hours:55,studies:4})};
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data})});await flush();await h.change('active-month',month);await flush();h.click('own-whatsapp');h.element('#own-share-hours').value='60';h.input();h.confirm(false);await h.change('own-share-source','manual');h.click('prev-month');h.click('own-send');await flush();assert.equal(h.element('#own-share-hours').value,'60');assert.equal(h.window.EmDiaApp.getUI().month,month);assert.equal(h.element('#modal').open,true);
+  await h.submit('modal-form',{hours:'60',minutes:'0',studies:'4'});await flush();assert.match(h.element('#modal').innerHTML,/60:00h/);h.auth('SIGNED_OUT',null);assert.equal(h.element('#modal').innerHTML,'');let copied=0;h.navigator.clipboard={writeText:async()=>{copied++;}};h.click('own-whatsapp-copy');await flush();assert.equal(copied,0);assert.equal(h.saveCalls(),0);
 });

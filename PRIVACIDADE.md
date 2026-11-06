@@ -14,6 +14,10 @@ A observação opcional pertence ao lançamento privado e fica disponível apena
 
 O cronômetro também é privado do cartão. Estado, horários e recibo do último lançamento ficam em tabela privada, sem acesso direto por navegador, administrador ou superintendente. As funções conferem a conta e o vínculo no servidor. A transferência do cartão leva o cronômetro; trocar o login não o reinicia. Não há cópia do cronômetro em localStorage ou no cache de instalação. Sair da conta limpa sua exibição, sem parar uma contagem na nuvem. Inclua essa tabela nas cópias privadas do banco; o backup JSON do grupo não a contém.
 
+A meta anual e os meses retroativos pertencem ao acompanhamento privado do cartão. Somente seu acesso de publicador pode consultá-los e alterá-los pelas funções próprias. Eles não entram na base JSON do grupo nem no backup exportado pelo responsável, não alteram relatórios recebidos e não são enviados automaticamente. A transferência e a troca de login preservam esses dados. Inclua annual_progress nas cópias privadas do banco; o cache de instalação continua contendo somente arquivos públicos.
+
+O texto para WhatsApp inclui somente os campos apresentados na conferência. Abrir o WhatsApp é uma ação explícita do usuário, que escolhe o destinatário e confirma o envio naquele aplicativo. Não são incluídas observações privadas, histórico do cronômetro, credenciais ou a base do grupo. Preparar, copiar ou abrir esse texto não grava um envio no sistema.
+
 Salvar um lançamento não envia o relatório. O envio exige mês encerrado e usa a soma calculada no banco, com controle de versões para evitar totais desatualizados. Remover um lançamento diário não remove um relatório recebido. O backup JSON do grupo não contém o diário privado; sua cópia de segurança exige uma exportação privada do banco por administração confiável.
 
 A chave publishable e a URL são identificadores públicos. Não dão acesso aos dados por si só. Nunca publique senha, chave secreta ou service_role.

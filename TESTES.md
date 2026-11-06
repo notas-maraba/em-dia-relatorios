@@ -1,5 +1,13 @@
 # Verificação
 
+O progresso anual verifica o ciclo de setembro a agosto, inclusive a virada em 31/08 e 01/09, meta padrão de 600h ajustável por cartão/ano, total conhecido, lacunas, zero e excesso. Cada mês usa somente uma fonte, com precedência de relatório regular recebido sobre diário regular e histórico pessoal. Meses futuros e de outra condição não somam. Horas ausentes em relatório recebido não podem virar zero nem ser completadas silenciosamente. A edição retroativa exige mês encerrado e não substitui um relatório ou diário existente; meses anteriores ao cadastro não alteram o período do cartão.
+
+Os testes de envio verificam o mês selecionado, navegação com três ações no acesso de publicador e preservação do fluxo de recebimento/reenvio. A prévia para WhatsApp exige dados explícitos e formata horas em HH:MMh, participação Sim/Não e estudos. Preparar/copiar/abrir WhatsApp não executa gravação nem marca recebido; notas privadas não aparecem no texto. As ações externas reais dependem do clique e da escolha do usuário, sem mensagem de teste para contatos reais.
+
+Na preparação da versão 4.5.0, passaram 389 testes Node: 74 de regras/PDF, 124 de nuvem, 147 da interface, 33 da função de usuários e 11 de instalação/cache, além da sintaxe. Os testes de núcleo e interface incluem a virada do ano de serviço, a separação das fontes, histórico antes do cadastro, meta por ano, conflitos, rascunhos, respostas tardias e os dois modelos de texto. O envio real pelo WhatsApp depende da ação do usuário no aparelho; não foi enviada mensagem a contatos reais para testar.
+
+No projeto dedicado, os dois testes anuais e as cinco regressões de cronômetro, observações, múltiplos lançamentos, diário e perfis passaram com rollback e zero contas fictícias remanescentes. A migração preservou os nove conjuntos existentes, incluindo o cronômetro e seu recibo, e a tabela anual começou vazia. Os consultores de segurança não apontaram novos avisos. Os ensaios usam versões obsoletas e fixtures; não representam carga concorrente com sessões simultâneas nem escrita em cartões reais.
+
 npm run check confere sintaxe. npm test executa regras de negócio e PDF, cliente de nuvem por grupo/perfil, ciclo de autenticação e gravação da interface e função de administração de usuários com dependências simuladas e dados fictícios.
 
 Os testes conferem sessão verificada, autorização, base vazia, falhas de rede, conflitos e ausência de repetição automática de gravação. A interface deve ocultar dados antes do login, confirmar alterações só após resposta do banco e limpar a tela ao sair.
