@@ -2,6 +2,9 @@
 backup*.json
 **/backup*.json
 em-dia-backup*.json
+em-dia-pendencias*.json
+em-dia-offline-backup*.json
+offline-backup*.json
 recuperacao-*.txt
 backups/
 dados-pessoais/

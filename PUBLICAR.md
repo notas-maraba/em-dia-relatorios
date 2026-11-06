@@ -19,6 +19,10 @@ Faça login, selecione o grupo e use Dados → Importar backup. Exporte uma cóp
 
 Em atualizações, preserve a base e as contas. Não reaplique a criação do schema; use migrações revisadas.
 
+Na versão 5, a migração de sincronização deve preceder a interface. Guarde uma cópia privada atualizada dos dez conjuntos existentes, incluindo diários, cronômetros e acompanhamento anual. A nova tabela privada de recibos começa vazia e deve entrar nas próximas cópias do banco. Confira autorização de ator e vínculo antes de qualquer replay, repetição com resposta perdida, CAS e duração do cronômetro sem conexão. Nunca use dados reais para ensaiar gravações offline.
+
+A cópia privada do aparelho é criada em IndexedDB em tempo de execução; não é um arquivo para upload. Publique assets/offline.js junto aos outros arquivos públicos e atualize a versão do shell. Não adicione respostas privadas ao service worker. Não copie a fila de um aparelho para o repositório nem substitua dados atuais da nuvem por um snapshot antigo.
+
 Na atualização do diário de horas, a migração deve preceder a interface. Ela cria armazenamento privado e funções autorizadas, sem inventar lançamentos para totais antigos nem substituir os relatórios recebidos. Verifique os testes de isolamento, datas, controle de versão, envio de mês encerrado e transferência com diário. Guarde uma cópia privada das tabelas atuais, incluindo vínculos e revisões. As cópias futuras do banco devem incluir também os diários, que não fazem parte do backup JSON do grupo. Não altere dados reais para testar.
 
 Na atualização para vários lançamentos por dia, guarde uma cópia privada atualizada incluindo o diário antes de aplicar a migração. A migração representa cada dia existente por um único lançamento, preservando os totais, versões e datas de atualização. Aplique a estrutura antes da interface e confira o teste transacional de múltiplos lançamentos. Uma versão antiga pode consultar o total do dia, mas precisa ser atualizada para modificar um dia que contenha vários registros separados.

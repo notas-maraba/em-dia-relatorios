@@ -54,11 +54,16 @@ const turn = () => new Promise(resolve => setImmediate(resolve));
 
 test('new UI requests its matching core release even while an older shell worker is active', async () => {
   const html = source('index.html');
+  const scripts = [...html.matchAll(/<script src="([^"]+)"/g)].map(match => match[1]);
+  const cloudPath = 'assets/cloud.js?v=' + VERSION, offlinePath = 'assets/offline.js?v=' + VERSION, appPath = 'assets/app.js?v=' + VERSION;
+  assert.ok(scripts.indexOf(cloudPath) >= 0 && scripts.indexOf(cloudPath) < scripts.indexOf(offlinePath) && scripts.indexOf(offlinePath) < scripts.indexOf(appPath),
+    'The durable cache must load after its validated cloud client and before application startup');
   const corePath = html.match(/<script src="([^"]*core\.js[^"]*)"/)[1];
   assert.equal(corePath, 'assets/core.js?v=' + VERSION);
   const current = worker(); await current.lifecycle('install');
   const coreUrl = new URL(corePath, SITE).href;
   assert.ok(current.requests.some(request => request.url === coreUrl));
+  assert.ok(current.requests.some(request => request.url === new URL(offlinePath, SITE).href));
   const previousShell = source('sw.js').replaceAll(VERSION, 'previous-release')
     .replace('assets/core.js?v=previous-release', 'assets/core.js');
   const previous = worker(previousShell); await previous.lifecycle('install');
@@ -92,7 +97,7 @@ test('manifest resolves inside the GitHub Pages folder and uses real install ico
 
 test('service worker installation fetches only exact static public assets without credentials', async () => {
   const w = worker(); await w.lifecycle('install');
-  assert.equal(w.requests.length, 16); assert.equal(new Set(w.requests.map(r => r.url)).size, 16);
+  assert.equal(w.requests.length, 17); assert.equal(new Set(w.requests.map(r => r.url)).size, 17);
   assert.ok([...w.stores.keys()][0].endsWith(VERSION), 'The shell cache must use the package release');
   const manifest = JSON.parse(source('manifest.webmanifest')), html = source('index.html');
   const iconPaths = manifest.icons.map(icon => new URL(icon.src, SITE).href);

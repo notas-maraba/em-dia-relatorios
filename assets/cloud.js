@@ -1,4 +1,4 @@
-/* Em dia — cliente Supabase. Apenas a sessão de login é persistida pelo SDK. */
+/* Em dia — cliente Supabase validado. O wrapper offline mantém a cópia privada do aparelho. */
 (function(root, factory) {
   'use strict';
   const api = factory();
@@ -290,6 +290,27 @@
     return {id: checkedGroupId(row.id), name: row.name, createdAt: row.created_at || null};
   }
 
+  function ownCardResult(row, current) {
+    const own = rowResult(row, current.defaultGroupId);
+    if (row.person_id !== current.publisherId || typeof row.group_name !== 'string' || !row.group_name.trim() ||
+        !Array.isArray(own.state.people) || own.state.people.length !== 1 || own.state.people[0]?.id !== current.publisherId ||
+        own.state.people[0].notes !== '' || !stateObject(own.state.reports) || !stateObject(own.state.reminders) || Object.keys(own.state.reminders).length ||
+        Object.values(own.state.reports).some(entries => !stateObject(entries) || Object.keys(entries).some(id => id !== current.publisherId) || Object.values(entries).some(report => report.notes !== '')) ||
+        !Array.isArray(row.revisions)) throw new CloudError('A nuvem retornou um cartão inválido.', 'invalid_response');
+    return {...own, groupId: row.group_id, personId: row.person_id,
+      group: {id: row.group_id, name: row.group_name, createdAt: null}, revisions: row.revisions.map(ownRevision)};
+  }
+
+  function revisionListResult(row) {
+    if (!stateObject(row) || !Array.isArray(row.revisions) || !Number.isSafeInteger(Number(row.total)) || Number(row.total) < row.revisions.length) throw new CloudError('A lista de alterações está inválida.', 'invalid_response');
+    return {total: Number(row.total), revisions: row.revisions.map(item => {
+      if (!stateObject(item) || typeof item.person_name !== 'string') throw new CloudError('A lista de alterações está inválida.', 'invalid_response');
+      return {id: checkedGroupId(item.id), version: checkedVersion(Number(item.version), 1), personId: checkedPersonId(item.person_id),
+        personName: item.person_name, month: checkedMonth(item.month), approvedReport: item.approved_report === null ? null : activityResult(item.approved_report),
+        proposedReport: activityResult(item.proposed_report), submittedAt: item.submitted_at || null};
+    })};
+  }
+
   function create({client, redirectTo = DEFAULT_REDIRECT} = {}) {
     if (!client?.auth || typeof client.from !== 'function' || typeof client.rpc !== 'function') {
       throw new CloudError('A conexão com a nuvem não está configurada.', 'invalid_client');
@@ -411,14 +432,7 @@
         if (current.role !== 'publisher') throw new AccessDeniedError();
         const result = await client.rpc('read_em_dia_own_card');
         if (result.error) throw result.error;
-        const row = objectResult(result.data), own = rowResult(row, current.defaultGroupId);
-        if (row.person_id !== current.publisherId || typeof row.group_name !== 'string' || !row.group_name.trim() ||
-            !Array.isArray(own.state.people) || own.state.people.length !== 1 || own.state.people[0]?.id !== current.publisherId ||
-            own.state.people[0].notes !== '' || !stateObject(own.state.reports) || !stateObject(own.state.reminders) || Object.keys(own.state.reminders).length ||
-            Object.values(own.state.reports).some(entries => !stateObject(entries) || Object.keys(entries).some(id => id !== current.publisherId) || Object.values(entries).some(report => report.notes !== '')) ||
-            !Array.isArray(row.revisions)) throw new CloudError('A nuvem retornou um cartão inválido.', 'invalid_response');
-        return {...own, groupId: row.group_id, personId: row.person_id,
-          group: {id: row.group_id, name: row.group_name, createdAt: null}, revisions: row.revisions.map(ownRevision)};
+        return ownCardResult(objectResult(result.data), current);
       } catch (error) { throw mappedError(error); }
     }
 
@@ -632,14 +646,7 @@
         await allowedGroup(id);
         const result = await client.rpc('list_em_dia_report_revisions', {p_group_id: id});
         if (result.error) throw result.error;
-        const row = objectResult(result.data);
-        if (!Array.isArray(row.revisions) || !Number.isSafeInteger(Number(row.total)) || Number(row.total) < row.revisions.length) throw new CloudError('A lista de alterações está inválida.', 'invalid_response');
-        return {total: Number(row.total), revisions: row.revisions.map(item => {
-          if (!stateObject(item) || typeof item.person_name !== 'string') throw new CloudError('A lista de alterações está inválida.', 'invalid_response');
-          return {id: checkedGroupId(item.id), version: checkedVersion(Number(item.version), 1), personId: checkedPersonId(item.person_id),
-            personName: item.person_name, month: checkedMonth(item.month), approvedReport: item.approved_report === null ? null : activityResult(item.approved_report),
-            proposedReport: activityResult(item.proposed_report), submittedAt: item.submitted_at || null};
-        })};
+        return revisionListResult(objectResult(result.data));
       } catch (error) { throw mappedError(error); }
     }
 
@@ -790,9 +797,9 @@
       } catch (error) { throw mappedError(error); }
     }
 
-    async function logout() {
+    async function logout({local = false} = {}) {
       try {
-        const result = await client.auth.signOut();
+        const result = await client.auth.signOut(local ? {scope: 'local'} : undefined);
         if (result.error) throw result.error;
       } catch (error) { throw mappedError(error); }
     }
@@ -841,7 +848,62 @@
       };
     }
 
-    return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, submitOwnReport, readOwnHours, saveOwnHours, saveOwnHoursLaunch, submitOwnHours, readOwnAnnual, saveOwnAnnualGoal, saveOwnAnnualRetro, readOwnTimer, changeOwnTimer, postOwnTimer, listRevisions, reviewRevision,
+    async function applyOfflineOperation({operationId, kind, payload} = {}) {
+      const id = checkedLaunchId(operationId), kinds = ['group_save','diary_launch','report_manual','report_diary','annual_goal','annual_retro','timer_change','timer_post'];
+      if (!kinds.includes(kind) || !stateObject(payload) || typeof payload.userId !== 'string') throw new CloudError('A operação offline é inválida.', 'invalid_operation');
+      const input = copy(payload);
+      try {
+        const current = await profile();
+        if (current.userId !== input.userId || (kind === 'group_save' ? !['admin','superintendent'].includes(current.role) :
+          current.role !== 'publisher' || input.groupId !== current.defaultGroupId || input.personId !== current.publisherId)) throw new AccessDeniedError();
+        const result = await client.rpc('apply_em_dia_offline_operation', {p_operation_id: id, p_kind: kind, p_payload: input});
+        if (result.error) throw result.error;
+        const row = objectResult(result.data), raw = row.confirmation;
+        if (row.operation_id !== id || row.kind !== kind || typeof row.replayed !== 'boolean' || !stateObject(raw)) throw new CloudError('Confirmação offline inválida.', 'invalid_response');
+        const confirmation = {};
+        for (const [wire, key] of [['revision','revision'],['version','version'],['hours_version','hoursVersion'],['timer_version','timerVersion']]) {
+          if (Object.hasOwn(raw, wire)) confirmation[key] = responseVersion(raw[wire], wire === 'revision' ? 1 : 0);
+        }
+        if (Object.hasOwn(raw, 'status')) {
+          if (!['accepted','pending'].includes(raw.status)) throw new CloudError('Confirmação offline inválida.', 'invalid_response');
+          confirmation.status = raw.status;
+        }
+        const required = {group_save:['revision'],diary_launch:['version'],report_manual:['version','revision','status'],report_diary:['version','revision','hoursVersion','status'],annual_goal:['version'],annual_retro:['version'],timer_change:['timerVersion'],timer_post:['timerVersion','hoursVersion']}[kind];
+        if (required.some(key => !Object.hasOwn(confirmation, key))) throw new CloudError('Confirmação offline incompleta.', 'invalid_response');
+        return {operationId: id, kind, replayed: row.replayed, confirmation};
+      } catch (error) { throw privateDiaryError(error, true); }
+    }
+
+    async function offlineSnapshot() {
+      try {
+        const current = await profile(), result = await client.rpc('read_em_dia_offline_snapshot');
+        if (result.error) throw result.error;
+        const row = objectResult(result.data), p = row.profile;
+        if (!stateObject(p) || p.user_id !== current.userId || p.role !== current.role || p.group_id !== current.defaultGroupId ||
+          (p.publisher_id ?? null) !== current.publisherId || !Array.isArray(row.groups) || !Array.isArray(row.states) ||
+          !Array.isArray(row.diaries) || !Array.isArray(row.annuals) || !Array.isArray(row.revisions)) throw new CloudError('Cópia offline inválida.', 'invalid_response');
+        const groups = row.groups.map(groupResult), ids = new Set(groups.map(group => group.id));
+        if (ids.size !== groups.length || groups.length > 5000 || row.diaries.length > 5000 || row.annuals.length > 300) throw new CloudError('Cópia offline inválida.', 'invalid_response');
+        const publisher = current.role === 'publisher';
+        if (publisher ? row.states.length || row.revisions.length || groups.some(group => group.id !== current.defaultGroupId) :
+          row.own_card != null || row.diaries.length || row.annuals.length || row.timer != null) throw new CloudError('Cópia fora do perfil.', 'invalid_response');
+        if (!current.isAdmin && groups.some(group => group.id !== current.defaultGroupId)) throw new AccessDeniedError();
+        const states = row.states.map(item => { if (!ids.has(item.group_id)) throw new AccessDeniedError(); return {groupId:item.group_id,bundle:item.state===null?null:rowResult(item,item.group_id)}; });
+        if (new Set(states.map(item => item.groupId)).size !== states.length) throw new CloudError('Cópia duplicada.', 'invalid_response');
+        // This RPC is a complete authorized snapshot, so a listed group with no
+        // state row is a known empty group. Cache misses outside it stay errors.
+        if (!publisher) for (const group of groups) if (!states.some(item=>item.groupId===group.id)) states.push({groupId:group.id,bundle:null});
+        const diaries = row.diaries.map(item => ({...ownHourLaunchesResult(item,current,checkedMonth(item.month)),canUse:item.can_use !== false}));
+        const annuals = row.annuals.map(item => ownAnnualResult(item,current,checkedServiceYear(item.service_year)));
+        if (new Set(diaries.map(item=>item.month)).size!==diaries.length || new Set(annuals.map(item=>item.serviceYear)).size!==annuals.length) throw new CloudError('Cópia duplicada.', 'invalid_response');
+        const revisions = row.revisions.map(item => {if (!ids.has(item.group_id)) throw new AccessDeniedError();return {groupId:item.group_id,items:revisionListResult(item.items)};});
+        if (new Set(revisions.map(item=>item.groupId)).size!==revisions.length) throw new CloudError('Cópia duplicada.', 'invalid_response');
+        return {profile:{...current},groups,states,diaries,annuals,revisions,
+          ...(publisher?{ownCard:ownCardResult(objectResult(row.own_card),current),timer:ownTimerResult(objectResult(row.timer),current)}:{})};
+      } catch (error) { throw privateDiaryError(error); }
+    }
+
+    return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, submitOwnReport, readOwnHours, saveOwnHours, saveOwnHoursLaunch, submitOwnHours, readOwnAnnual, saveOwnAnnualGoal, saveOwnAnnualRetro, readOwnTimer, changeOwnTimer, postOwnTimer, listRevisions, reviewRevision, applyOfflineOperation, offlineSnapshot,
       transferGroups, transferPublisher, publisherAccounts, listUsers, createUser, assignUser, createPublisherUser,
       login, loginPassword, logout, session, subscribeAuth});
   }
