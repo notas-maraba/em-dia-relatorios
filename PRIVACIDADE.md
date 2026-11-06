@@ -18,7 +18,7 @@ A meta anual e os meses retroativos pertencem ao acompanhamento privado do cart�
 
 O texto para WhatsApp inclui somente os campos apresentados na conferência. Abrir o WhatsApp é uma ação explícita do usuário, que escolhe o destinatário e confirma o envio naquele aplicativo. Não são incluídas observações privadas, histórico do cronômetro, credenciais ou a base do grupo. Preparar, copiar ou abrir esse texto não grava um envio no sistema.
 
-Salvar um lançamento não envia o relatório. O envio exige mês encerrado e usa a soma calculada no banco, com controle de versões para evitar totais desatualizados. Remover um lançamento diário não remove um relatório recebido. O backup JSON do grupo não contém o diário privado; sua cópia de segurança exige uma exportação privada do banco por administração confiável.
+Salvar um lançamento não envia o relatório. O envio pode ocorrer no mês corrente ou em mês anterior e usa a soma calculada no banco, com controle de versões para evitar totais desatualizados. O usuário confirma o envio; não há atualização automática do recebido quando novos dias são lançados. Alterações de um relatório recebido continuam aguardando decisão do responsável. Remover um lançamento diário não remove um relatório recebido. O backup JSON do grupo não contém o diário privado; sua cópia de segurança exige uma exportação privada do banco por administração confiável.
 
 A chave publishable e a URL são identificadores públicos. Não dão acesso aos dados por si só. Nunca publique senha, chave secreta ou service_role.
 
