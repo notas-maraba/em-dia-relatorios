@@ -2,6 +2,10 @@
 
 Aplicativo em português para acompanhar relatórios mensais, cadastrar publicadores e períodos de pioneiro, e gerar PDFs mensais e anuais.
 
+Na entrada, “Lembrar meu e-mail” guarda somente o endereço usado em um login bem-sucedido, se a opção for marcada. Não guarda a senha. “Permanecer conectado” mantém a sessão entre aberturas do navegador; desmarcado, o acesso fica na sessão do navegador. Fechar apenas uma aba ou suspender o aplicativo pode preservar essa sessão, conforme o navegador. Em aparelho compartilhado, use Sair. Essas escolhas não apagam alterações pendentes de sincronização.
+
+Administrador e superintendente também podem ter um cartão pessoal, mantendo suas permissões de administração. A administração vincula explicitamente a conta ao cartão correto em Usuários. O botão Meu cartão abre apenas esse cartão; Administração retorna ao trabalho do grupo. O vínculo pessoal é independente do grupo em consulta. O diário, cronômetro, relatórios, envio de correções e progresso anual seguem as mesmas regras do acesso de publicador, conforme a condição da pessoa em cada mês. Um vínculo não é deduzido pelo nome ou e-mail.
+
 No cabeçalho, cada conta tem foto, nome de exibição e tipo de acesso. Toque na foto ou no nome para abrir Meu perfil, escolher ou remover uma foto e alterar a senha. Isso está disponível para administrador, superintendente e publicador. A foto é privada da conta e não acompanha a transferência de um cartão. O nome de exibição não altera cadastros nem relatórios.
 
 O botão de lua alterna entre modo claro e escuro, preservando a preferência neste aparelho. O botão ao lado encerra a sessão, respeitando as pendências offline. Ajuda e sincronização continuam acessíveis no cabeçalho. O tema da impressão e dos PDFs permanece claro.

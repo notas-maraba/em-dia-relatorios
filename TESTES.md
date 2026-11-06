@@ -1,5 +1,7 @@
 # Verificação
 
+Na versão 5.2.0 passaram 563 testes Node: 74 core/PDF, 138 nuvem, 42 offline, 35 conta, 14 preferências de acesso, 9 login, 15 cartão pessoal dos responsáveis, 10 tema, 182 interface, 33 administração e 11 PWA. Sintaxe e diffcheck passaram. As suítes SQL manager-personal-security, roles-security e offline-receipts-security passaram com rollback. As assinaturas dos doze conjuntos privados ficaram idênticas antes/depois da migração, que também confere a preservação dentro da transação. Nenhuma conta real recebeu vínculo por suposição; nenhum e-mail foi enviado ou senha alterada para testar. Recuperação de senha foi adiada a pedido do usuário.
+
 Na versão 5.1.0 passaram 514 testes Node: 74 de regras/PDF, 132 de nuvem, 37 de offline, 35 de conta/foto/senha, 10 de tema, 182 da interface, 33 de administração e 11 de instalação/cache. A sintaxe e git diff --check passaram. Os testes usam contas fictícias, imagens sintéticas, Auth simulado e IndexedDB emulado; nenhuma senha ou foto real foi alterada para testar.
 
 account-profile-security.sql passou no banco com transação e rollback, deixando zero usuários e perfis fictícios. Cobre os três papéis, dono esperado, acesso direto negado, isolamento entre contas, versão exata, foto JPEG/base64 limitada e nomes inválidos. A migração preservou integralmente os onze conjuntos anteriores e começou com account_profiles vazio.
