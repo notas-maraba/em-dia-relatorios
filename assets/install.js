@@ -21,7 +21,7 @@
   function showInstructions() {
     const dialog = document.getElementById('install-dialog');
     if (!dialog) return;
-    dialog.innerHTML = '<div class="modal-wrap install-help"><header><div class="grow"><h2 id="install-title">Instalar o Em dia</h2><p>Abra o sistema pela tela inicial do aparelho.</p></div><button type="button" class="icon-btn" data-install-close aria-label="Fechar instruções de instalação">×</button></header><div class="modal-body">' + instructions() + '<p class="help">Se a opção não aparecer neste navegador, siga os passos no Chrome ou no Safari. É necessário estar conectado à internet para entrar, consultar e salvar os relatórios.</p></div><footer><button type="button" class="btn primary" data-install-close>Entendi</button></footer></div>';
+    dialog.innerHTML = '<div class="modal-wrap install-help"><header><div class="grow"><h2 id="install-title">Instalar o Em dia</h2><p>Abra o sistema pela tela inicial do aparelho.</p></div><button type="button" class="icon-btn" data-install-close aria-label="Fechar instruções de instalação">×</button></header><div class="modal-body">' + instructions() + '<p class="help">Se a opção não aparecer neste navegador, siga os passos no Chrome ou no Safari. Entre com internet uma primeira vez para preparar os dados neste aparelho. Depois, salve sem conexão e sincronize ao reabrir o aplicativo com internet. Criação de acessos e transferências exigem conexão.</p></div><footer><button type="button" class="btn primary" data-install-close>Entendi</button></footer></div>';
     if (!dialog.open) dialog.showModal();
   }
   async function install() {
