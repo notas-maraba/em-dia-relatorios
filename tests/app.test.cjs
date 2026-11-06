@@ -16,11 +16,11 @@ function fixture() {
   return state;
 }
 function harness(overrides={},options={}) {
-  const elements = new Map(), docEvents = new Map(), winEvents = new Map(), downloads = [],intervals=new Map();let intervalId=0,clock=options.now??Date.now();
+  const elements = new Map(), docEvents = new Map(), winEvents = new Map(), downloads = [],notifications=[],intervals=new Map();let intervalId=0,clock=options.now??Date.now(),offlineAdapter=null;
   function element(selector='') {
     if (elements.has(selector)) return elements.get(selector);
     const el={innerHTML:'',textContent:'',style:{},dataset:{},disabled:false,open:false,hidden:false,isConnected:true,value:'',
-      append(){},remove(){},focus(){},select(){},click(){},scrollIntoView(){},checkValidity(){return true;},
+      append(child){if(selector==='#toasts')notifications.push(child.textContent);},remove(){},focus(){},select(){},click(){},scrollIntoView(){},checkValidity(){return true;},
       showModal(){this.open=true;},close(){this.open=false;},addEventListener(name,fn){this[name]=fn;}};
     elements.set(selector,el); return el;
   }
@@ -38,24 +38,39 @@ function harness(overrides={},options={}) {
   const window={EmDiaCore:options.core||C,EMDIA_CLOUD_CONFIG:{url:'https://example.invalid',publishableKey:'test-public-key'},
     supabase:{createClient:()=>({})},EmDiaCloud:{...errors,create:()=>cloud},
     crypto:{randomUUID:()=>freshLaunchId(++launchCounter)},scrollTo(){},addEventListener(name,fn){winEvents.set(name,fn);}};
+  if(options.offlineFactory)window.EmDiaOffline={create(args){offlineAdapter=options.offlineFactory(args);return offlineAdapter;}};
+  window.indexedDB=options.indexedDB;
   const TestURL=class extends URL {static createObjectURL(blob){downloads.push(blob);return 'blob:fixture';}static revokeObjectURL(){}};
   const ClockDate=class extends Date {constructor(...args){super(...(args.length?args:[clock]));}static now(){return clock;}};
   const context={window,document,console,URL:TestURL,Blob,Date:options.now===undefined?Date:ClockDate,Number,String,Object,Array,Error,Promise,
-    navigator:{},confirm:()=>confirmResult,setTimeout:()=>1,
+    navigator:options.online===undefined?{}:{onLine:options.online},confirm:()=>confirmResult,setTimeout:()=>1,
     setInterval(fn){intervals.set(++intervalId,fn);return intervalId;},clearInterval(id){intervals.delete(id);},
     FormData:class {constructor(form){this.values=new Map(Object.entries(form.fields||{}));}get(k){return this.values.get(k)||null;}has(k){return this.values.has(k);}},
-    localStorage:new Proxy({}, {get(){throw Error('Application attempted to access local records');}})};
+    localStorage:options.storage||new Proxy({}, {get(){throw Error('Application attempted to access local records');}})};
   vm.runInNewContext(appCode,context,{filename:'assets/app.js'});
   function click(action,id='') {docEvents.get('click')({target:{closest:()=>({dataset:{action,id}})},preventDefault(){}});}
   function submit(id,fields={},value='') {return docEvents.get('submit')({target:{id,fields},submitter:{value},preventDefault(){}});}
   function change(id,value){const target=element('#'+id);target.id=id;target.value=value;return docEvents.get('change')({target});}
   function input(form='#modal-form') {docEvents.get('input')({target:{id:'person-name',closest:s=>s===form}});}
-  return {window,cloud,elements,element,click,submit,input,change,downloads,navigator:context.navigator,confirm(value){confirmResult=value;},saveCalls:()=>saveCalls,
+  return {window,cloud,elements,element,click,submit,input,change,downloads,notifications,navigator:context.navigator,offline:()=>offlineAdapter,confirm(value){confirmResult=value;},saveCalls:()=>saveCalls,
     auth(event,session){currentSession=session;authCallback(event,session);},
     focus(){winEvents.get('focus')();},visibility(value='visible'){document.visibilityState=value;docEvents.get('visibilitychange')?.();},
     advance(ms){clock+=ms;for(const tick of intervals.values())tick();},intervalCount:()=>intervals.size,
+    network(online){context.navigator.onLine=online;winEvents.get(online?'online':'offline')?.();},
     unload(){const event={preventDefault(){this.prevented=true;}};winEvents.get('beforeunload')?.(event);return event;}};
 }
+
+function offlineBoundary(args,options={}){
+  const listeners=new Set(),calls={ready:0,sync:0,exports:0,discard:0,logout:0},status={online:args.online(),pending:0,syncing:false,conflicts:[],blocked:false,error:null,available:true,lastSyncedAt:null,...options.status};
+  const get=()=>({...C.clone(status),online:args.online()}),emit=patch=>{Object.assign(status,patch);for(const listener of listeners)listener(get());};
+  const adapter={...args.cloud,ready:async()=>{calls.ready++;if(options.ready)await options.ready;},getSyncStatus:get,subscribeSync(fn){listeners.add(fn);return()=>listeners.delete(fn);},
+    async sync(){calls.sync++;emit({syncing:true});try{if(options.sync)await options.sync({status,emit,calls});}finally{emit({syncing:false});}},hasPending:async()=>status.pending>0,
+    async exportPending(){calls.exports++;return options.copy||{type:'private-pending-fixture',operations:[{kind:'group',text:'Alteração privada fictícia'}]};},
+    async discardPending(){calls.discard++;emit({pending:0,conflicts:[],blocked:false,error:null});return get();},
+    async logoutSafe(){if(status.pending){const error=Error('Pending');error.code='pending_changes';throw error;}calls.logout++;await args.cloud.logout();},...options.methods};
+  adapter.test={args,status,calls,emit};return adapter;
+}
+function testWebCrypto(t){const descriptor=Object.getOwnPropertyDescriptor(globalThis,'crypto');if(!globalThis.crypto?.randomUUID){Object.defineProperty(globalThis,'crypto',{value:require('node:crypto').webcrypto,configurable:true});t.after(()=>{if(descriptor)Object.defineProperty(globalThis,'crypto',descriptor);else delete globalThis.crypto;});}}
 test('records remain hidden until session verification and cloud read both finish',async()=>{
   const verification=deferred(),read=deferred();let readCalls=0;
   const h=harness({session:()=>verification.promise,read:()=>{readCalls++;return read.promise;}});
@@ -1346,4 +1361,104 @@ test('WhatsApp drafts survive cancelled source or month changes and prepared tex
   const data=pioneerFixture(),month=data.activeMonth;data.reports[month]={p_fixture:report({kind:'regular',hours:55,studies:4})};
   const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data})});await flush();await h.change('active-month',month);await flush();h.click('own-whatsapp');h.element('#own-share-hours').value='60';h.input();h.confirm(false);await h.change('own-share-source','manual');h.click('prev-month');h.click('own-send');await flush();assert.equal(h.element('#own-share-hours').value,'60');assert.equal(h.window.EmDiaApp.getUI().month,month);assert.equal(h.element('#modal').open,true);
   await h.submit('modal-form',{hours:'60',minutes:'0',studies:'4'});await flush();assert.match(h.element('#modal').innerHTML,/60:00h/);h.auth('SIGNED_OUT',null);assert.equal(h.element('#modal').innerHTML,'');let copied=0;h.navigator.clipboard={writeText:async()=>{copied++;}};h.click('own-whatsapp-copy');await flush();assert.equal(copied,0);assert.equal(h.saveCalls(),0);
+});
+
+test('offline wiring waits for readiness and reads only the existing SDK account identity',async()=>{
+  const ready=deferred(),database={},storageReads=[];let reads=0,created;
+  const h=harness({read:async()=>{reads++;return{state:fixture(),revision:7};}},{indexedDB:database,storage:{getItem(key){storageReads.push(key);return JSON.stringify({user:{id:'owner'},access_token:'fixture-never-copied'});}},offlineFactory:args=>{created=offlineBoundary(args,{ready:ready.promise});return created;}});
+  assert.equal(reads,0);assert.equal(h.window.EmDiaApp.getState(),null);assert.equal(created.test.args.indexedDB,database);assert.equal(await created.test.args.identity(),'owner');assert.deepEqual(storageReads,['em-dia-auth-v1']);
+  ready.resolve();await flush();await flush();assert.equal(created.test.calls.ready,1);assert.ok(reads>=1);assert.equal(h.window.EmDiaApp.getState().people.length,1);assert.doesNotMatch(JSON.stringify(created.getSyncStatus()),/fixture-never-copied|access_token/);
+});
+
+test('queued manager saves wait for durable confirmation and never claim a cloud save',async()=>{
+  const durable=deferred();let local=fixture(),adapter;
+  const h=harness({},{online:false,offlineFactory:args=>{adapter=offlineBoundary(args,{methods:{read:async()=>({state:C.clone(local),revision:7}),save:async next=>{await durable.promise;local=C.clone(next);adapter.test.emit({pending:1});return{state:C.clone(local),revision:8,queued:true};}}});return adapter;}});await flush();h.click('person-edit','p_fixture');
+  const saving=h.submit('modal-form',{name:'Pessoa Alterada Offline',start:local.activeMonth,end:'',notes:''});assert.equal(h.window.EmDiaApp.getState().people[0].name,'Pessoa de Teste');assert.equal(h.element('#modal').open,true);
+  durable.resolve();await saving;await flush();assert.equal(h.window.EmDiaApp.getState().people[0].name,'Pessoa Alterada Offline');assert.match(h.element('#cloud-account').innerHTML,/1 alteração pendente/);assert.match(h.element('#app').innerHTML,/salvas neste aparelho/);assert.doesNotMatch(h.element('#cloud-account').innerHTML,/Salvo na nuvem/);assert.match(h.notifications.at(-1),/Salvo neste aparelho/);assert.equal(h.window.EmDiaApp.getCloudStatus().blocked,false);assert.equal(h.saveCalls(),0);
+});
+
+test('queued publisher reports stay unapproved and a second local send uses the queued version',async()=>{
+  const data=pioneerFixture(),month=testToday().slice(0,7),payloads=[];let queued=null,version=0,adapter;
+  const h=harness({profile:async()=>publisherProfile()},{online:false,offlineFactory:args=>{adapter=offlineBoundary(args,{methods:{profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data,revisions:queued?[{id:'local_queue',month,status:'queued',version,report:queued}]:[]}),
+    readOwnHours:async requested=>hoursBundle(requested),submitOwnReport:async value=>{payloads.push(C.clone(value));queued={kind:'regular',...value.report};version++;adapter.test.emit({pending:version});return{status:'queued',queued:true,version};}}});return adapter;}});await flush();h.click('own-send');await flush();h.click('own-send-normal','manual');await h.submit('modal-form',{hours:'2',participated:'yes',studies:'1'});await flush();
+  assert.equal(C.getReport(h.window.EmDiaApp.getState(),'p_fixture',month),null);assert.match(h.element('#app').innerHTML,/ainda não foi entregue ao responsável/);assert.doesNotMatch(h.element('#app').innerHTML,/badge success">Relatório recebido/);assert.match(h.notifications.at(-1),/só será enviado.*após a sincronização/);
+  h.click('own-send');await flush();h.click('own-send-normal','manual');assert.match(h.element('#modal').innerHTML,/id="own-hours"[^>]*value="2"/);await h.submit('modal-form',{hours:'3',participated:'yes',studies:'2'});await flush();assert.deepEqual(payloads.map(value=>value.expectedVersion),[0,1]);assert.equal(C.getReport(h.window.EmDiaApp.getState(),'p_fixture',month),null);assert.equal(h.saveCalls(),0);
+});
+
+test('synchronization updates preserve an open draft and refresh confirmed data only after it closes',async()=>{
+  let reads=0,remote=fixture(),adapter;
+  const h=harness({read:async()=>{reads++;return{state:C.clone(remote),revision:7};}},{offlineFactory:args=>{adapter=offlineBoundary(args);return adapter;}});await flush();await flush();h.click('person-edit','p_fixture');h.element('#person-name').value='Rascunho a preservar';h.input();const before=reads;
+  remote.people[0].name='Versão confirmada fictícia';adapter.test.emit({pending:1,syncing:true});adapter.test.emit({pending:0,syncing:false});await flush();assert.equal(reads,before);assert.equal(h.element('#person-name').value,'Rascunho a preservar');assert.equal(h.element('#modal').open,true);
+  const syncs=adapter.test.calls.sync;h.confirm(false);h.click('cloud-reload');h.click('modal-close');await flush();assert.equal(reads,before);assert.equal(adapter.test.calls.sync,syncs);h.confirm(true);h.click('modal-close');await flush();assert.ok(reads>before);assert.equal(h.window.EmDiaApp.getState().people[0].name,'Versão confirmada fictícia');const settled=reads;await flush();await flush();assert.equal(reads,settled);h.click('cloud-reload');await flush();assert.equal(adapter.test.calls.sync,syncs+1);assert.ok(reads>settled);
+});
+
+test('visible pending changes retry with backoff without overlapping synchronization calls',async()=>{
+  const now=Date.now();let adapter,waiting=null;
+  const h=harness({},{now,offlineFactory:args=>{adapter=offlineBoundary(args,{status:{pending:1},sync:async()=>{if(waiting)await waiting.promise;}});return adapter;}});await flush();await flush();const initial=adapter.test.calls.sync;assert.equal(initial,1);
+  waiting=deferred();h.advance(15000);h.focus();h.network(true);await flush();assert.equal(adapter.test.calls.sync,initial+1);waiting.resolve();await flush();h.visibility('hidden');h.advance(60000);await flush();assert.equal(adapter.test.calls.sync,initial+1);
+  waiting=null;h.visibility('visible');await flush();assert.equal(adapter.test.calls.sync,initial+2);adapter.test.emit({pending:0});h.advance(120000);await flush();assert.equal(adapter.test.calls.sync,initial+2);
+});
+
+test('a confirmed online action retries its snapshot refresh without repeating the mutation or claiming completion early',async()=>{
+  let adapter,created=0,refreshed=false;
+  const h=harness({read:async()=>{const state=fixture();if(refreshed)state.people[0].name='Dados confirmados atualizados';return{state,revision:7};},createUser:async()=>{created++;adapter.test.emit({needsRefresh:true,error:'Snapshot fixture unavailable'});return{ok:true,refreshRequired:true};}},{now:Date.now(),offlineFactory:args=>{adapter=offlineBoundary(args,{sync:async({emit,calls})=>{if(calls.sync>=3){refreshed=true;emit({needsRefresh:false,error:null});}}});return adapter;}});await flush();await flush();h.click('user-new');await h.submit('modal-form',{email:'offline-fixture@example.test',password:'Fixture-only-password',role:'superintendent',groupMode:'existing',groupId:'group_a'});await flush();assert.equal(created,1);assert.equal(adapter.getSyncStatus().pending,0);assert.match(h.element('#cloud-account').innerHTML,/Revisar sincronização/);
+  h.click('sync-now');await flush();assert.equal(adapter.test.calls.sync,2);assert.match(h.notifications.at(-1),/ainda precisa atualizar/);assert.doesNotMatch(h.notifications.at(-1),/Sincronização concluída/);h.advance(15000);await flush();assert.equal(adapter.test.calls.sync,3);assert.equal(created,1);assert.equal(h.window.EmDiaApp.getState().people[0].name,'Dados confirmados atualizados');assert.equal(adapter.getSyncStatus().needsRefresh,false);
+});
+
+test('pending logout keeps the session and offers a private copy before explicit discard',async()=>{
+  let adapter,rawLogouts=0;
+  const h=harness({logout:async()=>{rawLogouts++;}},{online:false,offlineFactory:args=>{adapter=offlineBoundary(args,{status:{pending:1}});return adapter;}});await flush();h.click('sign-out');await flush();assert.ok(h.window.EmDiaApp.getState());assert.equal(rawLogouts,0);assert.match(h.element('#modal').innerHTML,/Sincronização|Baixar cópia privada/);
+  h.click('sync-export');await flush();assert.equal(adapter.test.calls.exports,1);assert.equal(h.downloads.length,1);assert.match(await h.downloads[0].text(),/Alteração privada fictícia/);assert.equal(rawLogouts,0);
+  h.confirm(false);h.click('sync-discard');await flush();assert.equal(adapter.test.calls.discard,0);h.confirm(true);h.click('sync-discard');await flush();assert.equal(adapter.test.calls.discard,1);assert.ok(h.window.EmDiaApp.getState());h.click('sign-out');await flush();assert.equal(adapter.test.calls.logout,1);assert.equal(rawLogouts,1);assert.equal(h.window.EmDiaApp.getState(),null);
+});
+
+test('conflicts are reviewable and never force a local overwrite automatically',async()=>{
+  let adapter,reads=0;
+  const h=harness({read:async()=>{reads++;return{state:fixture(),revision:7};}},{online:false,offlineFactory:args=>{adapter=offlineBoundary(args,{status:{pending:1,blocked:true,conflicts:[{operationId:'operation_fixture',kind:'group',code:'conflict',message:'A versão confirmada mudou.'}]}});return adapter;}});await flush();assert.match(h.element('#cloud-account').innerHTML,/Conflito de sincronização/);h.click('sync-details');assert.match(h.element('#modal').innerHTML,/não foi sobrescrita|A versão confirmada mudou/);assert.match(h.element('#modal').innerHTML,/data-action="sync-now" disabled/);assert.equal(adapter.test.calls.sync,0);
+  h.click('sync-export');await flush();h.confirm(false);h.click('sync-discard');await flush();assert.equal(adapter.test.calls.discard,0);assert.equal(adapter.test.status.pending,1);h.confirm(true);h.click('sync-discard');await flush();assert.equal(adapter.test.calls.discard,1);assert.ok(reads>=2);assert.equal(h.saveCalls(),0);
+});
+
+test('offline administration requires a connection while ordinary data remains readable',async()=>{
+  let createCalls=0,accountReads=0;
+  const h=harness({createUser:async()=>{createCalls++;},publisherAccounts:async()=>{accountReads++;return[];}},{online:false,offlineFactory:args=>offlineBoundary(args)});await flush();assert.match(h.element('#app').innerHTML,/Pessoa de Teste/);h.click('show-groups');await flush();assert.match(h.element('#app').innerHTML,/data-action="group-new"[^>]*disabled/);h.click('group-new');assert.equal(h.element('#modal').open,false);
+  h.click('tab','users');await flush();assert.match(h.element('#app').innerHTML,/data-action="user-new"[^>]*disabled/);h.click('user-new');await flush();assert.equal(createCalls,0);h.click('tab','people');await flush();h.click('person-edit','p_fixture');assert.match(h.element('#modal').innerHTML,/data-action="publisher-access"[^>]*disabled/);h.click('publisher-access','p_fixture');await flush();assert.equal(accountReads,0);assert.match(h.element('#form-error').textContent,/precisa de conexão/);
+});
+
+test('an unavailable offline scope requests a connection instead of fabricating an empty group',async()=>{
+  const unavailable=Error('Unavailable');unavailable.code='offline_unavailable';
+  const h=harness({read:async()=>{throw unavailable;}},{online:false,offlineFactory:args=>offlineBoundary(args,{status:{available:false}})});await flush();assert.equal(h.window.EmDiaApp.getState(),null);assert.match(h.element('#app').innerHTML,/Conecte-se à internet para carregar/);assert.doesNotMatch(h.element('#app').innerHTML,/Exemplo fictício|Nenhum publicador acompanhado/);assert.equal(h.saveCalls(),0);
+});
+
+test('authentication revocation immediately hides cached data without discarding queued operations',async()=>{
+  for(const code of ['auth_required','access_denied','binding_changed']){
+    let adapter;
+    const h=harness({},{online:false,offlineFactory:args=>{adapter=offlineBoundary(args,{status:{pending:1}});return adapter;}});await flush();assert.ok(h.window.EmDiaApp.getState());adapter.test.emit({pending:1,blocked:true,available:false,blockedReason:code,error:'Access changed'});await flush();assert.equal(h.window.EmDiaApp.getState(),null);assert.equal(h.window.EmDiaApp.getSyncStatus(),null);assert.equal(adapter.test.status.pending,1);assert.equal(adapter.test.calls.discard,0);assert.doesNotMatch(h.element('#app').innerHTML,/Pessoa de Teste|Alteração privada fictícia/);
+  }
+});
+
+test('a verified permission change clears a private group draft before loading the newly allowed scope',async t=>{
+  testWebCrypto(t);const Offline=require('../assets/offline.js'),{IDBFactory}=require('fake-indexeddb');let profile={userId:'owner',role:'admin',isAdmin:true,defaultGroupId:'group_a',publisherId:null};
+  const stateFor=groupId=>{const value=fixture();value.people[0].name=groupId==='group_b'?'Pessoa do grupo antigo':'Pessoa do grupo autorizado';return value;};
+  const snapshot=()=>{const groups=[{id:'group_a',name:'Grupo autorizado',createdAt:null},...(profile.role==='admin'?[{id:'group_b',name:'Grupo antigo',createdAt:null}]:[])];return{profile:C.clone(profile),groups,states:groups.map(group=>({groupId:group.id,bundle:{state:stateFor(group.id),revision:7,updatedAt:null}})),revisions:groups.map(group=>({groupId:group.id,items:{revisions:[],total:0}})),diaries:[],annuals:[]};};
+  const h=harness({profile:async()=>C.clone(profile),offlineSnapshot:async()=>snapshot()},{online:true,indexedDB:new IDBFactory(),storage:{getItem:()=>JSON.stringify({user:{id:'owner'}})},offlineFactory:args=>Offline.create(args)});
+  async function until(check){for(let n=0;n<100;n++){await flush();if(check())return;}assert.fail('Permission scope did not settle');}
+  await until(()=>h.window.EmDiaApp.getState()&&!h.window.EmDiaApp.getCloudStatus().loading&&!h.offline().getSyncStatus().syncing);h.click('group-open','group_b');await until(()=>h.window.EmDiaApp.getSelectedGroup()?.id==='group_b'&&h.window.EmDiaApp.getState());h.click('person-edit','p_fixture');h.input();h.element('#person-name').value='Rascunho do grupo antigo';assert.match(h.element('#app').innerHTML,/Pessoa do grupo antigo/);
+  profile={...profile,role:'superintendent',isAdmin:false};await h.offline().sync();assert.equal(h.element('#modal').innerHTML,'');assert.doesNotMatch(h.element('#app').innerHTML,/Pessoa do grupo antigo|Rascunho do grupo antigo/);
+  await until(()=>h.window.EmDiaApp.getProfile()?.role==='superintendent'&&h.window.EmDiaApp.getState());assert.equal(h.window.EmDiaApp.getSelectedGroup().id,'group_a');assert.match(h.element('#app').innerHTML,/Pessoa do grupo autorizado/);assert.doesNotMatch(h.element('#app').innerHTML,/Pessoa do grupo antigo/);assert.equal(await h.offline().hasPending(),false);
+});
+
+test('real offline engine preserves a saved launch and queued report through an application reload',async t=>{
+  testWebCrypto(t);
+  const Offline=require('../assets/offline.js'),{IDBFactory}=require('fake-indexeddb'),database=new IDBFactory(),data=pioneerFixture(),month=testToday().slice(0,7),year=C.serviceYearForMonth(month);
+  const card=ownBundle({state:data}),snapshot={profile:publisherProfile(),groups:[card.group],states:[],diaries:[hoursBundle(month)],annuals:[annualBundle(year)],revisions:[],ownCard:card,timer:timerBundle()};let snapshotReads=0,serverWrites=0,logouts=0;
+  const storage={getItem:key=>key==='em-dia-auth-v1'?JSON.stringify({user:{id:'owner'},access_token:'fixture-identity-only'}):null};
+  const services={profile:async()=>publisherProfile(),offlineSnapshot:async()=>{snapshotReads++;return C.clone(snapshot);},applyOfflineOperation:async()=>{serverWrites++;throw Error('No fixture writes expected');},logout:async()=>{logouts++;}};
+  const options=online=>({online,indexedDB:database,storage,offlineFactory:args=>Offline.create(args)});
+  async function until(check){for(let step=0;step<100;step++){await flush();if(check())return;}assert.fail('The isolated offline lifecycle did not settle');}
+  const first=harness(services,options(true));await until(()=>first.window.EmDiaApp.getState()&&!first.window.EmDiaApp.getCloudStatus().loading&&!first.offline().getSyncStatus().syncing&&!/data-action="own-hours-edit" disabled/.test(first.element('#app').innerHTML));await flush();const settledReads=snapshotReads;await flush();await flush();assert.equal(snapshotReads,settledReads);first.click('cloud-reload');await until(()=>snapshotReads>settledReads&&!first.offline().getSyncStatus().syncing&&!first.window.EmDiaApp.getCloudStatus().loading);const reloadedReads=snapshotReads;await flush();await flush();assert.equal(snapshotReads,reloadedReads);
+  first.network(false);first.click('own-hours-edit');assert.equal(first.element('#modal').open,true,first.notifications.at(-1));await first.submit('modal-form',{date:testToday(),dayHours:'1',dayMinutes:'5',note:'Anotação privada do teste offline'});assert.equal(first.element('#modal').open,false,first.element('#form-error').textContent);await until(()=>first.offline().getSyncStatus().pending===1);assert.match(first.element('#app').innerHTML,/Total da data: 1h05/);assert.equal(serverWrites,0);
+  const beforeReload=snapshotReads,reopened=harness(services,options(false));await until(()=>reopened.window.EmDiaApp.getState()&&reopened.element('#app').innerHTML.includes('Total da data: 1h05'));assert.equal(snapshotReads,beforeReload);assert.match(reopened.element('#app').innerHTML,/Anotação privada do teste offline/);
+  reopened.click('own-send');await flush();reopened.click('own-send-normal','diary');await reopened.submit('modal-form',{studies:'1'});await until(()=>reopened.offline().getSyncStatus().pending===2&&reopened.element('#app').innerHTML.includes('ainda não foi entregue'));
+  assert.equal(C.getReport(reopened.window.EmDiaApp.getState(),'p_fixture',month),null);const annual=await reopened.offline().readOwnAnnual(year),row=annual.months.find(item=>item.month===month);assert.equal(row.source,'diary');assert.equal(row.minutes,65);assert.equal(serverWrites,0);
+  reopened.click('sign-out');await until(()=>reopened.element('#modal').innerHTML.includes('Baixar cópia privada'));assert.ok(reopened.window.EmDiaApp.getState());assert.equal(logouts,0);assert.equal(reopened.offline().getSyncStatus().pending,2);const copy=await reopened.offline().exportPending();assert.doesNotMatch(JSON.stringify(copy),/fixture-identity-only|access_token/);
 });

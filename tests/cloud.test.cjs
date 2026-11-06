@@ -1326,3 +1326,65 @@ test('falhas de leitura, meta e retro não repetem RPC nem retêm payload ou dad
     }
   }
 });
+
+function offlineWire(changes={}) {
+  return {profile:{user_id:user.id,role:'publisher',is_admin:false,group_id:group.id,publisher_id:'p1'},groups:[group],states:[],
+    own_card:ownCard(),diaries:[hoursRow({can_use:true})],annuals:[annualRow()],timer:timerRow(),revisions:[],...changes};
+}
+test('bootstrap offline normaliza somente o cartão, diários, anuais e timer próprios sem credenciais',async()=>{
+  const raw=offlineWire({access_token:'PRIVATE_OFFLINE_FIXTURE'});raw.profile.refresh_token='PRIVATE_OFFLINE_FIXTURE';raw.diaries[0].raw_request='PRIVATE_OFFLINE_FIXTURE';
+  const m=mock({role:'publisher',rpcResults:{read_em_dia_offline_snapshot:{data:raw,error:null}}});
+  const snapshot=await Cloud.create({client:m.client}).offlineSnapshot();
+  assert.equal(snapshot.profile.userId,user.id);assert.equal(snapshot.ownCard.personId,'p1');assert.equal(snapshot.diaries[0].canUse,true);
+  assert.equal(snapshot.annuals[0].serviceYear,2026);assert.equal(snapshot.timer.status,'idle');
+  assert(!JSON.stringify(snapshot).includes('PRIVATE_OFFLINE_FIXTURE'));
+  assert.deepEqual(operationCalls(m.calls),[['rpc','read_em_dia_offline_snapshot',undefined]]);assert(!m.calls.some(call=>call.table));
+});
+test('bootstrap gestor contém os grupos autorizados e distingue grupo vazio explícito de estado ausente',async()=>{
+  const raw=offlineWire({profile:{user_id:user.id,role:'superintendent',is_admin:false,group_id:group.id,publisher_id:null},states:[{group_id:group.id,state:null,revision:0,updated_at:null}],own_card:null,diaries:[],annuals:[],timer:null,
+    revisions:[{group_id:group.id,items:{revisions:[],total:0}}]});
+  const m=mock({rpcResults:{read_em_dia_offline_snapshot:{data:raw,error:null}}});const result=await Cloud.create({client:m.client}).offlineSnapshot();assert.equal(result.states[0].bundle,null);
+  const absent=mock({rpcResults:{read_em_dia_offline_snapshot:{data:{...raw,states:[]},error:null}}});assert.equal((await Cloud.create({client:absent.client}).offlineSnapshot()).states[0].bundle,null);
+  const broken=mock({rpcResults:{read_em_dia_offline_snapshot:{data:{...raw,states:undefined},error:null}}});await assert.rejects(Cloud.create({client:broken.client}).offlineSnapshot(),e=>e.code==='invalid_response');
+});
+test('bootstrap recusa outro vínculo, bases de gestor no publisher, dados próprios no gestor e recursos duplicados',async()=>{
+  for(const change of [{profile:{...offlineWire().profile,user_id:'untrusted'}},{profile:{...offlineWire().profile,publisher_id:'p2'}},{states:[{group_id:group.id,state}]},
+    {diaries:[hoursRow({person_id:'p2'})]},{diaries:[hoursRow(),hoursRow()]},{annuals:[annualRow(),annualRow()]},{timer:timerRow('idle',{group_id:otherGroupId})},
+    {revisions:[{group_id:group.id,items:{revisions:[],total:0}}]},{groups:[group,group]}]){
+    const m=mock({role:'publisher',rpcResults:{read_em_dia_offline_snapshot:{data:offlineWire(change),error:null}}});await assert.rejects(Cloud.create({client:m.client}).offlineSnapshot(),Cloud.CloudError);
+  }
+  const m=mock({rpcResults:{read_em_dia_offline_snapshot:{data:offlineWire({profile:{user_id:user.id,role:'superintendent',group_id:group.id,publisher_id:null}}),error:null}}});await assert.rejects(Cloud.create({client:m.client}).offlineSnapshot(),Cloud.CloudError);
+});
+test('diário próprio arquivado é preservado no bootstrap com canUse false sem ampliar a operação antiga',async()=>{
+  const m=mock({role:'publisher',rpcResults:{read_em_dia_offline_snapshot:{data:offlineWire({diaries:[hoursRow({kind:'publisher',can_use:false})]}),error:null}}});
+  assert.equal((await Cloud.create({client:m.client}).offlineSnapshot()).diaries[0].canUse,false);
+});
+test('gateway offline leva UUID durável, kind e payload com ator esperado e sanitiza confirmação',async()=>{
+  const payload={userId:user.id,groupId:group.id,personId:'p1',id:launchId(7),date:'2026-10-01',minutes:60,note:'Private note fixture',expectedVersion:0};
+  const data={operation_id:launchId(1),kind:'diary_launch',replayed:true,confirmation:{version:1,private_note:'PRIVATE_OFFLINE_FIXTURE'},private_note:'PRIVATE_OFFLINE_FIXTURE'};
+  const m=mock({role:'publisher',rpcResults:{apply_em_dia_offline_operation:{data,error:null}}});
+  const result=await Cloud.create({client:m.client}).applyOfflineOperation({operationId:launchId(1),kind:'diary_launch',payload});
+  assert.deepEqual(result,{operationId:launchId(1),kind:'diary_launch',replayed:true,confirmation:{version:1}});
+  assert.deepEqual(operationCalls(m.calls),[['rpc','apply_em_dia_offline_operation',{p_operation_id:launchId(1),p_kind:'diary_launch',p_payload:payload}]]);
+  assert(!JSON.stringify(result).includes('PRIVATE_OFFLINE_FIXTURE'));
+});
+test('gateway não aplica payload de outra conta, pessoa ou grupo mesmo com sessão válida',async()=>{
+  for(const changes of [{userId:'other'},{groupId:otherGroupId},{personId:'p2'}]){
+    const m=mock({role:'publisher'});await assert.rejects(Cloud.create({client:m.client}).applyOfflineOperation({operationId:launchId(1),kind:'annual_goal',payload:{userId:user.id,groupId:group.id,personId:'p1',...changes}}),Cloud.AccessDeniedError);assert.equal(operationCalls(m.calls).length,0);
+  }
+});
+test('gateway confirma os campos de versão específicos de cada recurso e rejeita recibos incoerentes',async()=>{
+  for(const [kind,confirmation] of Object.entries({group_save:{revision:2},diary_launch:{version:1},report_manual:{version:1,revision:2,status:'accepted'},report_diary:{version:2,revision:3,status:'pending',hours_version:4},annual_goal:{version:0},annual_retro:{version:1},timer_change:{timer_version:2},timer_post:{timer_version:3,hours_version:4}})){
+    const role=kind==='group_save'?'superintendent':'publisher',m=mock({role,rpcResults:{apply_em_dia_offline_operation:{data:{operation_id:launchId(1),kind,replayed:false,confirmation},error:null}}});
+    const result=await Cloud.create({client:m.client}).applyOfflineOperation({operationId:launchId(1),kind,payload:{userId:user.id,groupId:group.id,personId:role==='publisher'?'p1':null}});assert.equal(result.kind,kind);
+  }
+  for(const changes of [{operation_id:launchId(2)},{kind:'timer_post'},{replayed:null},{confirmation:{}},{confirmation:{version:'NaN'}}]){
+    const m=mock({role:'publisher',rpcResults:{apply_em_dia_offline_operation:{data:{operation_id:launchId(1),kind:'diary_launch',replayed:false,confirmation:{version:1},...changes},error:null}}});
+    await assert.rejects(Cloud.create({client:m.client}).applyOfflineOperation({operationId:launchId(1),kind:'diary_launch',payload:{userId:user.id,groupId:group.id,personId:'p1'}}),Cloud.CloudError);
+  }
+});
+test('bootstrap e gateway não retêm erros brutos ou repetem uma gravação por conta própria',async()=>{
+  for(const action of ['snapshot','apply']){const m=mock({role:'publisher',rpcThrow:Object.assign(Error('PRIVATE_OFFLINE_FIXTURE'),{code:'PRIVATE_OFFLINE_FIXTURE',request:{note:'PRIVATE_OFFLINE_FIXTURE'}})}),api=Cloud.create({client:m.client});
+    await assert.rejects(action==='snapshot'?api.offlineSnapshot():api.applyOfflineOperation({operationId:launchId(1),kind:'annual_goal',payload:{userId:user.id,groupId:group.id,personId:'p1'}}),e=>e instanceof Cloud.CloudError&&!Object.hasOwn(e,'cause')&&!JSON.stringify(e).includes('PRIVATE_OFFLINE_FIXTURE')&&!e.message.includes('PRIVATE_OFFLINE_FIXTURE'));assert.equal(operationCalls(m.calls).length,1);
+  }
+});
