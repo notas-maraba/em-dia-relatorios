@@ -130,7 +130,7 @@
 
   function ownHoursResult(row, current, month) {
     try {
-      if (row.group_id !== current.defaultGroupId || row.person_id !== current.publisherId || row.month !== month ||
+      if (row.group_id !== personalGroup(current) || row.person_id !== current.publisherId || row.month !== month ||
           !['publisher', 'regular', 'auxiliary'].includes(row.kind) || !stateObject(row.entries) ||
           typeof row.closed !== 'boolean' || !Number.isSafeInteger(row.total_minutes) || row.total_minutes < 0 ||
           row.total_minutes > MAX_DIARY_MINUTES || !(row.updated_at === null || typeof row.updated_at === 'string')) throw new Error('Invalid diary');
@@ -181,7 +181,7 @@
 
   function ownTimerResult(row, current) {
     try {
-      if (row.group_id !== current.defaultGroupId || row.person_id !== current.publisherId ||
+      if (row.group_id !== personalGroup(current) || row.person_id !== current.publisherId ||
           !['idle', 'running', 'paused', 'stopped'].includes(row.status) ||
           !Number.isSafeInteger(row.accumulated_ms) || row.accumulated_ms < 0 ||
           !Number.isSafeInteger(row.elapsed_ms) || row.elapsed_ms < 0) throw new Error('Invalid timer');
@@ -222,7 +222,7 @@
     try {
       const today = checkedDate(row.today), now = today.slice(0, 7), currentYear = Number(now.slice(0, 4)) - (Number(now.slice(5, 7)) < 9 ? 1 : 0),
         nullable = (value, max) => value === null || Number.isSafeInteger(value) && value >= 0 && value <= max;
-      if (row.group_id !== current.defaultGroupId || row.person_id !== current.publisherId || row.service_year !== serviceYear || serviceYear > currentYear ||
+      if (row.group_id !== personalGroup(current) || row.person_id !== current.publisherId || row.service_year !== serviceYear || serviceYear > currentYear ||
           !Number.isSafeInteger(row.target_minutes) || row.target_minutes < 1 || row.target_minutes > MAX_DIARY_MINUTES * 12 ||
           !Array.isArray(row.months) || row.months.length !== 12 || !(row.updated_at === null || typeof row.updated_at === 'string')) throw new Error('Invalid annual goal');
       if (row.updated_at !== null) responseInstant(row.updated_at);
@@ -290,8 +290,11 @@
     return {id: checkedGroupId(row.id), name: row.name, createdAt: row.created_at || null};
   }
 
+  const personalGroup = current => current.personalGroupId ?? (current.role === 'publisher' ? current.defaultGroupId : null);
+  const hasPersonalCard = current => !!current.publisherId && !!personalGroup(current);
+
   function ownCardResult(row, current) {
-    const own = rowResult(row, current.defaultGroupId);
+    const own = rowResult(row, personalGroup(current));
     if (row.person_id !== current.publisherId || typeof row.group_name !== 'string' || !row.group_name.trim() ||
         !Array.isArray(own.state.people) || own.state.people.length !== 1 || own.state.people[0]?.id !== current.publisherId ||
         own.state.people[0].notes !== '' || !stateObject(own.state.reports) || !stateObject(own.state.reminders) || Object.keys(own.state.reminders).length ||
@@ -346,8 +349,9 @@
           (row.is_admin !== undefined && row.is_admin !== (row.role === 'admin'))) throw new AccessDeniedError();
       const defaultGroupId = row.group_id === null ? null : checkedGroupId(row.group_id);
       const publisherId = row.publisher_id === null || row.publisher_id === undefined ? null : checkedPersonId(row.publisher_id);
-      if ((row.role === 'publisher') !== (publisherId !== null) || row.role === 'publisher' && !defaultGroupId) throw new AccessDeniedError();
-      return {userId: current.user.id, role: row.role, isAdmin: row.role === 'admin', defaultGroupId, publisherId};
+      const personalGroupId = row.personal_group_id == null ? (row.role === 'publisher' ? defaultGroupId : null) : checkedGroupId(row.personal_group_id);
+      if ((publisherId === null) !== (personalGroupId === null) || row.role === 'publisher' && (!publisherId || personalGroupId !== defaultGroupId)) throw new AccessDeniedError();
+      return {userId: current.user.id, role: row.role, isAdmin: row.role === 'admin', defaultGroupId, publisherId, personalGroupId};
       } catch (error) { throw mappedError(error); }
     }
 
@@ -429,7 +433,7 @@
     async function readOwnCard() {
       try {
         const current = await profile();
-        if (current.role !== 'publisher') throw new AccessDeniedError();
+        if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('read_em_dia_own_card');
         if (result.error) throw result.error;
         return ownCardResult(objectResult(result.data), current);
@@ -440,11 +444,11 @@
       const selectedMonth = checkedMonth(month), input = activityInput(report), version = checkedVersion(expectedVersion);
       try {
         const current = await profile();
-        if (current.role !== 'publisher') throw new AccessDeniedError();
+        if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('submit_em_dia_own_report', {p_month: selectedMonth, p_report: input, p_expected_version: version});
         if (result.error) throw result.error;
         const row = objectResult(result.data);
-        if (!['accepted', 'pending'].includes(row.status) || row.group_id !== current.defaultGroupId || row.person_id !== current.publisherId || row.month !== selectedMonth || typeof row.unchanged !== 'boolean') {
+        if (!['accepted', 'pending'].includes(row.status) || row.group_id !== personalGroup(current) || row.person_id !== current.publisherId || row.month !== selectedMonth || typeof row.unchanged !== 'boolean') {
           throw new CloudError('Não foi possível confirmar o envio. Recarregue seu cartão antes de tentar novamente.', 'invalid_response');
         }
         const savedVersion = checkedVersion(Number(row.version));
@@ -458,7 +462,7 @@
       const selectedMonth = checkedMonth(month);
       try {
         const current = await profile();
-        if (current.role !== 'publisher') throw new AccessDeniedError();
+        if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('read_em_dia_own_hour_launches', {p_month: selectedMonth});
         if (result.error) throw result.error;
         return ownHourLaunchesResult(objectResult(result.data), current, selectedMonth);
@@ -472,7 +476,7 @@
       }
       try {
         const current = await profile();
-        if (current.role !== 'publisher') throw new AccessDeniedError();
+        if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('save_em_dia_own_hours', {p_date: selectedDate, p_minutes: minutes, p_expected_version: version});
         if (result.error) throw result.error;
         const row = objectResult(result.data), saved = ownHoursResult(row, current, selectedDate.slice(0, 7));
@@ -495,7 +499,7 @@
       }
       try {
         const current = await profile();
-        if (current.role !== 'publisher') throw new AccessDeniedError();
+        if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('save_em_dia_own_hour_launch_note', {
           p_id: launchId, p_date: selectedDate, p_minutes: minutes, p_note: note, p_expected_version: version
         });
@@ -519,12 +523,12 @@
       }
       try {
         const current = await profile();
-        if (current.role !== 'publisher') throw new AccessDeniedError();
+        if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('submit_em_dia_own_hours', {p_month: selectedMonth, p_participated: participated,
           p_studies: studies, p_expected_hours_version: hoursVersion, p_expected_report_version: reportVersion});
         if (result.error) throw result.error;
         const row = objectResult(result.data), savedVersion = responseVersion(row.version), savedHoursVersion = responseVersion(row.hours_version, 1);
-        if (!['accepted', 'pending'].includes(row.status) || row.group_id !== current.defaultGroupId || row.person_id !== current.publisherId ||
+        if (!['accepted', 'pending'].includes(row.status) || row.group_id !== personalGroup(current) || row.person_id !== current.publisherId ||
             row.month !== selectedMonth || typeof row.unchanged !== 'boolean' || savedHoursVersion !== hoursVersion ||
             !Number.isSafeInteger(row.total_minutes) || row.total_minutes < 0 || row.total_minutes > MAX_DIARY_MINUTES ||
             (savedVersion === 0 && !(row.status === 'accepted' && row.unchanged)) ||
@@ -539,7 +543,7 @@
     async function readOwnTimer() {
       try {
         const current = await profile();
-        if (current.role !== 'publisher') throw new AccessDeniedError();
+        if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('read_em_dia_own_timer');
         if (result.error) throw result.error;
         return ownTimerResult(objectResult(result.data), current);
@@ -550,7 +554,7 @@
       const year = checkedServiceYear(serviceYear);
       try {
         const current = await profile();
-        if (current.role !== 'publisher') throw new AccessDeniedError();
+        if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('read_em_dia_own_annual', {p_service_year: year});
         if (result.error) throw result.error;
         return ownAnnualResult(objectResult(result.data), current, year);
@@ -562,7 +566,7 @@
       if (!Number.isSafeInteger(targetMinutes) || targetMinutes < 1 || targetMinutes > MAX_DIARY_MINUTES * 12) throw new CloudError('Informe uma meta anual válida.', 'invalid_target');
       try {
         const current = await profile();
-        if (current.role !== 'publisher') throw new AccessDeniedError();
+        if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('save_em_dia_own_annual_goal', {p_service_year: year, p_target_minutes: targetMinutes, p_expected_version: version});
         if (result.error) throw result.error;
         const row = objectResult(result.data), saved = ownAnnualResult(row, current, year);
@@ -579,7 +583,7 @@
           Number.isSafeInteger(studies) && studies >= 0 && studies <= 9999)) throw new CloudError('Informe as horas e os estudos completos do mês anterior.', 'invalid_retro');
       try {
         const current = await profile();
-        if (current.role !== 'publisher') throw new AccessDeniedError();
+        if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('save_em_dia_own_annual_retro', {p_service_year: year, p_month: selectedMonth,
           p_minutes: minutes, p_studies: studies, p_expected_version: version});
         if (result.error) throw result.error;
@@ -596,7 +600,7 @@
       const id = checkedLaunchId(timerId), version = checkedVersion(expectedVersion);
       try {
         const current = await profile();
-        if (current.role !== 'publisher') throw new AccessDeniedError();
+        if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('change_em_dia_own_timer', {p_action: action, p_timer_id: id, p_expected_version: version});
         if (result.error) throw result.error;
         const row = objectResult(result.data), saved = ownTimerResult(row, current);
@@ -616,7 +620,7 @@
       if (typeof launchNote !== 'string' || launchNote.length > MAX_NOTE_LENGTH) throw new CloudError('Informe uma observação com até 1000 caracteres ou deixe em branco.', 'invalid_note');
       try {
         const current = await profile();
-        if (current.role !== 'publisher') throw new AccessDeniedError();
+        if (!hasPersonalCard(current)) throw new AccessDeniedError();
         const result = await client.rpc('post_em_dia_own_timer', {p_timer_id: id, p_expected_timer_version: timerVersion,
           p_launch_id: itemId, p_date: selectedDate, p_minutes: minutes, p_note: launchNote, p_expected_hours_version: hoursVersion});
         if (result.error) throw result.error;
@@ -776,6 +780,26 @@
       return {userId: checkedGroupId(result.userId), group: groupResult(result.group), personId: person};
     }
 
+    function personalBindingResult(row) {
+      if (!stateObject(row) || (row.group_id == null) !== (row.person_id == null)) throw new CloudError('Vínculo pessoal inválido.', 'invalid_response');
+      return {userId:checkedGroupId(row.user_id),groupId:row.group_id==null?null:checkedGroupId(row.group_id),personId:row.person_id==null?null:checkedPersonId(row.person_id)};
+    }
+    async function listPersonalBindings() {
+      try { const current=await profile();if(!current.isAdmin)throw new AccessDeniedError();
+        const result=await client.rpc('list_em_dia_personal_bindings');if(result.error)throw result.error;
+        if(!Array.isArray(result.data)||result.data.length>5000)throw new CloudError('Lista de vínculos inválida.','invalid_response');
+        const rows=result.data.map(personalBindingResult);if(rows.some(x=>!x.groupId)||new Set(rows.map(x=>x.userId)).size!==rows.length)throw new CloudError('Lista de vínculos inválida.','invalid_response');return rows;
+      } catch(error){throw mappedError(error);}
+    }
+    async function bindPersonalCard({userId,groupId,personId,expectedGroupId,expectedPersonId}={}) {
+      if((groupId===null)!==(personId===null)||(expectedGroupId===null)!==(expectedPersonId===null))throw new CloudError('Confira o vínculo pessoal.','invalid_input');
+      const actor=checkedGroupId(userId),group=groupId===null?null:checkedGroupId(groupId),person=personId===null?null:checkedPersonId(personId),expectedGroup=expectedGroupId===null?null:checkedGroupId(expectedGroupId),expectedPerson=expectedPersonId===null?null:checkedPersonId(expectedPersonId);
+      try {const current=await profile();if(!current.isAdmin)throw new AccessDeniedError();
+        const result=await client.rpc('bind_em_dia_personal_card',{p_user_id:actor,p_group_id:group,p_person_id:person,p_expected_group_id:expectedGroup,p_expected_person_id:expectedPerson,p_expected_actor_id:current.userId});if(result.error)throw result.error;
+        const row=personalBindingResult(objectResult(result.data));if(row.userId!==actor||row.groupId!==group||row.personId!==person)throw new CloudError('Não foi possível confirmar o vínculo pessoal.','invalid_response');return row;
+      } catch(error){throw mappedError(error,true);}
+    }
+
     async function login(email) {
       const normalized = String(email || '').trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
@@ -855,7 +879,7 @@
       try {
         const current = await profile();
         if (current.userId !== input.userId || (kind === 'group_save' ? !['admin','superintendent'].includes(current.role) :
-          current.role !== 'publisher' || input.groupId !== current.defaultGroupId || input.personId !== current.publisherId)) throw new AccessDeniedError();
+          !hasPersonalCard(current) || input.groupId !== personalGroup(current) || input.personId !== current.publisherId)) throw new AccessDeniedError();
         const result = await client.rpc('apply_em_dia_offline_operation', {p_operation_id: id, p_kind: kind, p_payload: input});
         if (result.error) throw result.error;
         const row = objectResult(result.data), raw = row.confirmation;
@@ -880,13 +904,13 @@
         if (result.error) throw result.error;
         const row = objectResult(result.data), p = row.profile;
         if (!stateObject(p) || p.user_id !== current.userId || p.role !== current.role || p.group_id !== current.defaultGroupId ||
-          (p.publisher_id ?? null) !== current.publisherId || !Array.isArray(row.groups) || !Array.isArray(row.states) ||
+          (p.publisher_id ?? null) !== current.publisherId || (p.personal_group_id ?? (p.role === 'publisher' ? p.group_id : null)) !== personalGroup(current) || !Array.isArray(row.groups) || !Array.isArray(row.states) ||
           !Array.isArray(row.diaries) || !Array.isArray(row.annuals) || !Array.isArray(row.revisions)) throw new CloudError('Cópia offline inválida.', 'invalid_response');
         const groups = row.groups.map(groupResult), ids = new Set(groups.map(group => group.id));
         if (ids.size !== groups.length || groups.length > 5000 || row.diaries.length > 5000 || row.annuals.length > 300) throw new CloudError('Cópia offline inválida.', 'invalid_response');
-        const publisher = current.role === 'publisher';
+        const publisher = current.role === 'publisher', personal = hasPersonalCard(current);
         if (publisher ? row.states.length || row.revisions.length || groups.some(group => group.id !== current.defaultGroupId) :
-          row.own_card != null || row.diaries.length || row.annuals.length || row.timer != null) throw new CloudError('Cópia fora do perfil.', 'invalid_response');
+          !personal && (row.own_card != null || row.diaries.length || row.annuals.length || row.timer != null)) throw new CloudError('Cópia fora do perfil.', 'invalid_response');
         if (!current.isAdmin && groups.some(group => group.id !== current.defaultGroupId)) throw new AccessDeniedError();
         const states = row.states.map(item => { if (!ids.has(item.group_id)) throw new AccessDeniedError(); return {groupId:item.group_id,bundle:item.state===null?null:rowResult(item,item.group_id)}; });
         if (new Set(states.map(item => item.groupId)).size !== states.length) throw new CloudError('Cópia duplicada.', 'invalid_response');
@@ -899,12 +923,12 @@
         const revisions = row.revisions.map(item => {if (!ids.has(item.group_id)) throw new AccessDeniedError();return {groupId:item.group_id,items:revisionListResult(item.items)};});
         if (new Set(revisions.map(item=>item.groupId)).size!==revisions.length) throw new CloudError('Cópia duplicada.', 'invalid_response');
         return {profile:{...current},groups,states,diaries,annuals,revisions,
-          ...(publisher?{ownCard:ownCardResult(objectResult(row.own_card),current),timer:ownTimerResult(objectResult(row.timer),current)}:{})};
+          ...(personal?{ownCard:ownCardResult(objectResult(row.own_card),current),timer:ownTimerResult(objectResult(row.timer),current)}:{})};
       } catch (error) { throw privateDiaryError(error); }
     }
 
     return Object.freeze({profile, groups, read, save, createGroup, readOwnCard, submitOwnReport, readOwnHours, saveOwnHours, saveOwnHoursLaunch, submitOwnHours, readOwnAnnual, saveOwnAnnualGoal, saveOwnAnnualRetro, readOwnTimer, changeOwnTimer, postOwnTimer, listRevisions, reviewRevision, applyOfflineOperation, offlineSnapshot,
-      transferGroups, transferPublisher, publisherAccounts, listUsers, createUser, assignUser, createPublisherUser,
+      transferGroups, transferPublisher, publisherAccounts, listUsers, createUser, assignUser, createPublisherUser, listPersonalBindings, bindPersonalCard,
       login, loginPassword, logout, session, subscribeAuth});
   }
 
