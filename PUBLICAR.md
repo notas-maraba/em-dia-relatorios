@@ -25,6 +25,8 @@ Na atualização para vários lançamentos por dia, guarde uma cópia privada at
 
 ## Instalação no celular
 
+Na versão 4.5.0, a migração de progresso anual regular deve preceder a interface. Guarde uma cópia privada atualizada dos nove conjuntos existentes, incluindo o cronômetro e seu recibo. A tabela annual_progress começa vazia, sem recalcular metas nem regravar relatórios, diários ou cronômetros existentes. Confira os testes annual-progress-security.sql e annual-transfer-security.sql com rollback, as regressões de perfis, diário e cronômetro e os consultores de segurança. Inclua a nova tabela nas próximas cópias privadas do banco.
+
 Na versão 4.4.0, aplique em ordem as migrações de horas acumuladas/observações e cronômetro persistente antes da interface. Guarde uma cópia privada atualizada antes de cada migração. Elas verificam a preservação dos oito conjuntos existentes; a tabela de cronômetros começa vazia. Observações antigas não são inventadas nem regravadas. Verifique os testes accumulated-notes-security.sql e timer-security.sql, além das regressões de diário, múltiplos lançamentos e perfis, todos com rollback. Inclua service_timers nas próximas cópias privadas do banco. Não inicie cronômetros nem grave lançamentos em cartões reais para testar.
 
 Publique também manifest.webmanifest, sw.js, assets/install.js e assets/icons/. A instalação usa HTTPS no endereço público e abre em janela de aplicativo. Não precisa de uma loja de aplicativos.
