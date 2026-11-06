@@ -203,7 +203,8 @@ begin
   v_result:=public.save_em_dia_own_hour_launch(v_a,v_today,60,0);
   v_result:=public.save_em_dia_own_hour_launch(v_b,v_today,30,1);
   assert (v_result->>'total_minutes')::integer=90 and jsonb_array_length(v_result->'launches')=2;
-  perform pg_temp.expect_launch_error(format('select public.submit_em_dia_own_hours(%L,true,0,2,0)',v_open),'22023');
+  v_result:=public.submit_em_dia_own_hours(v_open,true,0,2,0);
+  assert v_result->>'status'='accepted' and (v_result->>'total_minutes')::integer=90;
   v_snapshot:=public.read_em_dia_own_hour_launches(v_month);
   reset role;
 
