@@ -762,7 +762,7 @@ test('current regular and auxiliary months allow direct manual first sends and r
     if(correcting)data.reports[month]={p_fixture:report({kind,hours:12,studies:1})};
     const finish=async value=>{payloads.push(C.clone(value));if(!correcting)data.reports[month]={p_fixture:report({kind,...value.report})};return correcting?{status:'pending',version:5,hoursVersion:7,totalMinutes:60}:{status:'accepted',version:1};};
     const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data,revisions}),readOwnHours:async()=>hoursBundle(month,{[date]:60},{kind,version:7}),submitOwnHours:finish,submitOwnReport:finish});await flush();
-    assert.doesNotMatch(h.element('#app').innerHTML,/data-action="own-hours-submit" disabled|data-action="own-report" disabled/);assert.match(h.element('#app').innerHTML,/pode enviar agora e continuar lançando horas/);
+    assert.doesNotMatch(h.element('#app').innerHTML,/data-action="(?:own-hours-submit|own-report)"/);assert.match(h.element('#app').innerHTML,/Use o aviãozinho Enviar|pode enviar agora e continuar lançando horas/);
     h.click(correcting?'own-hours-submit':'own-report');await flush();assert.equal(h.element('#modal').open,true);assert.equal(payloads.length,0);assert.match(h.element('#modal').innerHTML,/Correções posteriores aguardam decisão/);
     await h.submit('modal-form',{hours:'3,5',participated:'yes',studies:'2'});await flush();assert.equal(payloads.length,1);
     assert.deepEqual(payloads[0],correcting?{month,participated:true,studies:2,expectedHoursVersion:7,expectedReportVersion:4}:{month,report:{participated:true,hours:3.5,studies:2},expectedVersion:0});
@@ -774,7 +774,7 @@ test('empty current and closed pioneer diaries never turn an unknown monthly tot
   for(const kind of ['regular','auxiliary'])for(const current of [false,true]){
     const data=pioneerFixture(kind),month=current?testToday().slice(0,7):data.activeMonth;let submits=0;
     const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async requested=>hoursBundle(requested,{},{kind}),submitOwnHours:async()=>{submits++;}});await flush();await h.change('active-month',month);await flush();h.click('own-hours-submit');await flush();
-    assert.equal(h.element('#modal').open,false);assert.equal(submits,0);assert.match(h.element('#app').innerHTML,/data-action="own-hours-submit" disabled/);
+    assert.equal(h.element('#modal').open,false);assert.equal(submits,0);assert.doesNotMatch(h.element('#app').innerHTML,/data-action="own-hours-submit"/);h.click('own-send');await flush();assert.match(h.element('#modal').innerHTML,/data-action="own-send-normal" data-id="diary" disabled/);
   }
 });
 
@@ -1220,9 +1220,10 @@ test('only regular publishers see annual progress while the central send action 
     const data=kind==='publisher'?fixture():pioneerFixture(kind);let reads=0;
     const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnAnnual:async year=>{reads++;return annualBundle(year);}});await flush();
     const html=h.element('#app').innerHTML,nav=h.element('#mobile-nav').innerHTML;
+    assert.doesNotMatch(html,/data-action="(?:own-hours-submit|own-report)"/);assert.match(html,/Use o aviãozinho Enviar/);assert.equal((nav.match(/data-action="own-send"/g)||[]).length,1);
     assert.equal(html.includes('data-action="annual-open"'),kind==='regular');assert.match(nav,/data-action="own-send" data-id="send"[^>]*publisher-send/);
     assert.ok(nav.indexOf('Meu cartão')<nav.indexOf('Enviar'));assert.ok(nav.indexOf('Enviar')<nav.indexOf('Meus relatórios'));assert.equal(reads,0);
-    if(kind==='regular'){assert.ok(html.indexOf('Conferir e enviar o mês')<html.indexOf('Progresso anual'));h.click('annual-open');await flush();assert.equal(reads,1);assert.match(h.element('#app').innerHTML,/Progresso anual/);}
+    if(kind==='regular'){h.click('annual-open');await flush();assert.equal(reads,1);assert.match(h.element('#app').innerHTML,/Progresso anual/);}
   }
 });
 
@@ -1311,7 +1312,7 @@ test('central sending permits the current month for ordinary publishers and both
 test('a future pioneer month remains unavailable through direct and central sending',async()=>{
   const data=pioneerFixture(),future=C.addMonth(testToday().slice(0,7),1);let writes=0,diaryReads=0;
   data.activeMonth=future;data.people[0].startMonth=future;data.people[0].roles[0].start=future;
-  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async month=>{diaryReads++;return hoursBundle(month);},submitOwnReport:async()=>{writes++;},submitOwnHours:async()=>{writes++;}});await flush();assert.equal(h.window.EmDiaApp.getUI().month,future);assert.match(h.element('#app').innerHTML,/data-action="own-report" disabled/);
+  const h=harness({profile:async()=>publisherProfile(),readOwnCard:async()=>ownBundle({state:data}),readOwnHours:async month=>{diaryReads++;return hoursBundle(month);},submitOwnReport:async()=>{writes++;},submitOwnHours:async()=>{writes++;}});await flush();assert.equal(h.window.EmDiaApp.getUI().month,future);assert.doesNotMatch(h.element('#app').innerHTML,/data-action="own-report"/);
   for(const action of ['own-report','own-hours-submit','own-send']){h.click(action);await flush();assert.equal(h.element('#modal').open,false);}h.click('own-send-normal','manual');await flush();assert.equal(h.element('#modal').open,false);assert.equal(diaryReads,0);assert.equal(writes,0);assert.equal(h.saveCalls(),0);
 });
 

@@ -1,5 +1,9 @@
 # Verificação
 
+Na versão 4.5.2, o cartão deixa de renderizar os botões de envio duplicados para os três tipos de publicador. O aviãozinho central continua oferecendo total do diário, total manual, reenvio e preparação do WhatsApp conforme o mês e a condição. Confira a ausência das ações duplicadas na página e a permanência dos botões de confirmação nos formulários. A mudança é somente de interface: sem alteração de banco, autenticação ou regras de aprovação.
+
+Na preparação desta versão, os 390 testes Node e a sintaxe passaram. O cenário existente de publicador comum, pioneiro regular e auxiliar confere a ausência das duas ações duplicadas na página e o aviãozinho único na navegação. Os testes do menu central continuam verificando a conferência e os envios com controle de versão. Não foram enviados relatórios reais para testar.
+
 Na versão 4.5.1, passaram 390 testes Node (74 de regras/PDF, 124 de nuvem, 148 da interface, 33 da função de usuários e 11 de instalação/cache), além da sintaxe. O mês corrente fica disponível para pioneiro regular e auxiliar, no diário, no total manual e no botão central Enviar. Meses futuros, períodos sem acompanhamento e diários vazios continuam protegidos. O teste de mês corrente verifica que abrir a conferência não envia automaticamente e que os parâmetros de versão e estudos continuam no envio.
 
 tests/current-month-reports-security.sql verifica no banco o primeiro envio aceito, correções pendentes, aceitação/recusa, repetição segura, versões obsoletas, continuidade do diário e isolamento das observações privadas no mês em andamento. Enviar não altera a condição de mês aberto nem bloqueia novos lançamentos. O progresso anual continua usando o recebido aprovado até a decisão de uma correção.

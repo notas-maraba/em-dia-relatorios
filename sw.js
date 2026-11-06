@@ -1,20 +1,20 @@
-/* Em dia 4.5.1: cache only this explicit public application shell. */
+/* Em dia 4.5.2: cache only this explicit public application shell. */
 'use strict';
-const RELEASE = '4.5.1';
+const RELEASE = '4.5.2';
 const BASE = new URL('./', self.location.href);
 const CACHE_PREFIX = 'em-dia-public-shell-' + encodeURIComponent(BASE.pathname) + '-';
 const CACHE_NAME = CACHE_PREFIX + RELEASE;
 const SHELL = [
   './',
   './index.html',
-  './assets/app.css?v=4.5.1',
-  './assets/core.js?v=4.5.1',
+  './assets/app.css?v=4.5.2',
+  './assets/core.js?v=4.5.2',
   './assets/pdf.js',
   './assets/vendor/supabase.js',
-  './assets/config.js?v=4.5.1',
-  './assets/cloud.js?v=4.5.1',
-  './assets/app.js?v=4.5.1',
-  './assets/install.js?v=4.5.1',
+  './assets/config.js?v=4.5.2',
+  './assets/cloud.js?v=4.5.2',
+  './assets/app.js?v=4.5.2',
+  './assets/install.js?v=4.5.2',
   './manifest.webmanifest',
   './assets/icons/relatorios-32-v311.png',
   './assets/icons/relatorios-192-v311.png',
