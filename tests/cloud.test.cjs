@@ -1178,3 +1178,151 @@ test('cronômetro não repete chamadas após falha, CAS ou rejeição e não ret
     }
   }
 });
+
+function annualRow(changes = {}) {
+  const serviceYear = changes.service_year ?? 2026, today = changes.today ?? '2026-11-06';
+  const months = Array.from({length: 12}, (_, i) => i < 4 ? serviceYear + '-' + String(i + 9).padStart(2, '0') : (serviceYear + 1) + '-' + String(i - 3).padStart(2, '0'));
+  return {group_id: group.id, person_id: 'p1', service_year: serviceYear, today, target_minutes: 36000, version: 0, updated_at: null,
+    months: months.map(month => ({month, kind: 'regular', source: month > today.slice(0, 7) ? 'future' : 'missing', minutes: null, studies: null,
+      retro_minutes: null, retro_studies: null, can_edit_retro: month < today.slice(0, 7)})), ...changes};
+}
+function annualRetroRow(minutes = 3300, studies = 2, changes = {}) {
+  const row = annualRow({version: 2, unchanged: false});
+  row.months[0] = {...row.months[0], source: minutes === null ? 'missing' : 'retroactive', minutes, studies, retro_minutes: minutes, retro_studies: studies};
+  return {...row, ...changes};
+}
+
+test('anual próprio usa somente RPC verificada e normaliza doze meses sem retornar metadados privados extras', async () => {
+  const raw = annualRow({private_note: 'PRIVATE_ANNUAL_FIXTURE', user_id: 'PRIVATE_ANNUAL_FIXTURE'});
+  raw.months[0].internal_note = 'PRIVATE_ANNUAL_FIXTURE';
+  const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_annual: {data: raw, error: null}}});
+  const result = await Cloud.create({client: m.client}).readOwnAnnual(2026);
+  assert.deepEqual(Object.keys(result).sort(), ['groupId', 'personId', 'serviceYear', 'today', 'targetMinutes', 'version', 'updatedAt', 'months'].sort());
+  assert.equal(result.groupId, group.id); assert.equal(result.personId, 'p1'); assert.equal(result.targetMinutes, 36000);
+  assert.equal(result.months.length, 12); assert.equal(result.months[0].month, '2026-09'); assert.equal(result.months[11].month, '2027-08');
+  assert.deepEqual(result.months[0], {month: '2026-09', kind: 'regular', source: 'missing', minutes: null, studies: null,
+    retroMinutes: null, retroStudies: null, canEditRetro: true});
+  result.months[0].minutes = 500; assert.equal(raw.months[0].minutes, null);
+  assert(!JSON.stringify(result).includes('PRIVATE_ANNUAL_FIXTURE'));
+  assert.deepEqual(operationCalls(m.calls), [['rpc', 'read_em_dia_own_annual', {p_service_year: 2026}]]);
+  assert(!m.calls.some(call => call.table));
+});
+
+test('anual preserva zero, hora aprovada desconhecida e retro sobreposto sem criar fallback', async () => {
+  const row = annualRow({version: '3', updated_at: '2026-11-06T12:00:00.123456+00:00'});
+  row.months[0] = {...row.months[0], source: 'approved', minutes: null, studies: 2, retro_minutes: 3300, retro_studies: 3, can_edit_retro: false};
+  row.months[1] = {...row.months[1], source: 'diary', minutes: 0, retro_minutes: 3000, retro_studies: 4, can_edit_retro: false};
+  row.months[2] = {...row.months[2], source: 'not_regular'};
+  row.months[3].kind = 'auxiliary';
+  const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_annual: {data: row, error: null}}});
+  const result = await Cloud.create({client: m.client}).readOwnAnnual(2026);
+  assert.equal(result.version, 3); assert.equal(result.months[0].minutes, null); assert.equal(result.months[0].retroMinutes, 3300);
+  assert.equal(result.months[1].minutes, 0); assert.equal(result.months[1].studies, null); assert.equal(result.months[2].source, 'not_regular');
+});
+
+test('anual recusa outro escopo, ano futuro, calendário inválido e limites incoerentes', async () => {
+  for (const changes of [{group_id: otherGroupId}, {person_id: 'p2'}, {service_year: 2025}, {today: '2026-02-30'},
+    {today: '2026-08-31'}, {target_minutes: 0}, {target_minutes: 535681}, {target_minutes: '36000'}, {target_minutes: 1.5},
+    {version: -1}, {updated_at: 'PRIVATE_ANNUAL_FIXTURE'}, {months: []}, {months: Array(12)}, {months: annualRow().months.slice(1)}]) {
+    const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_annual: {data: annualRow(changes), error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).readOwnAnnual(2026), error => error.code === 'invalid_response');
+  }
+});
+
+test('anual exige ordem setembro-agosto e fonte coerente com valores, tipo, retro e mês futuro', async () => {
+  for (const changes of [{month: '2026-10'}, {kind: 'admin'}, {source: 'unknown'}, {source: 'future', can_edit_retro: false},
+    {source: 'diary'}, {source: 'approved', kind: 'publisher', can_edit_retro: false}, {minutes: 0}, {minutes: 44641},
+    {minutes: '1'}, {studies: 10000}, {studies: 1.5}, {retro_minutes: 0}, {retro_minutes: null, retro_studies: 0},
+    {can_edit_retro: false}, {can_edit_retro: 'true'}, {source: 'retroactive', minutes: 30, studies: 1, retro_minutes: 31, retro_studies: 1}]) {
+    const row = annualRow(); row.months[0] = {...row.months[0], ...changes};
+    const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_annual: {data: row, error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).readOwnAnnual(2026), error => error.code === 'invalid_response');
+  }
+  const row = annualRow(); row.months[3] = {...row.months[3], source: 'missing'};
+  const m = mock({role: 'publisher', rpcResults: {read_em_dia_own_annual: {data: row, error: null}}});
+  await assert.rejects(Cloud.create({client: m.client}).readOwnAnnual(2026), error => error.code === 'invalid_response');
+});
+
+test('meta anual leva somente ano, minutos e CAS e confirma valor exato sem alterar relatórios', async () => {
+  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_annual_goal: {data: annualRow({target_minutes: 30000, version: 1, unchanged: false}), error: null}}});
+  const result = await Cloud.create({client: m.client}).saveOwnAnnualGoal({serviceYear: 2026, targetMinutes: 30000, expectedVersion: 0,
+    groupId: otherGroupId, personId: 'p2', months: [], report: {hours: 1}, private_note: 'PRIVATE_ANNUAL_FIXTURE'});
+  assert.equal(result.targetMinutes, 30000); assert.equal(result.version, 1); assert.equal(result.unchanged, false);
+  assert.deepEqual(operationCalls(m.calls), [['rpc', 'save_em_dia_own_annual_goal', {p_service_year: 2026, p_target_minutes: 30000, p_expected_version: 0}]]);
+  assert(!m.calls.some(call => call.table));
+});
+
+test('meta aceita extremos suportados e retry idêntico sem repetir operação', async () => {
+  for (const targetMinutes of [1, 535680]) {
+    const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_annual_goal: {data: annualRow({target_minutes: targetMinutes, version: 3, unchanged: true}), error: null}}});
+    const result = await Cloud.create({client: m.client}).saveOwnAnnualGoal({serviceYear: 2026, targetMinutes, expectedVersion: 2});
+    assert(result.unchanged); assert.equal(result.targetMinutes, targetMinutes); assert.equal(operationCalls(m.calls).length, 1);
+  }
+  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_annual_goal: {data: annualRow({unchanged: true}), error: null}}});
+  const result = await Cloud.create({client: m.client}).saveOwnAnnualGoal({serviceYear: 2026, targetMinutes: 36000, expectedVersion: 0});
+  assert(result.unchanged); assert.equal(result.version, 0); assert.equal(result.targetMinutes, 36000);
+});
+
+test('retroativo mensal leva horas e estudos privados completos, e null duplo remove sem criar zero', async () => {
+  for (const [minutes, studies] of [[3300, 2], [0, 0], [null, null]]) {
+    const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_annual_retro: {data: annualRetroRow(minutes, studies), error: null}}});
+    const result = await Cloud.create({client: m.client}).saveOwnAnnualRetro({serviceYear: 2026, month: '2026-09', minutes, studies, expectedVersion: 1,
+      groupId: otherGroupId, personId: 'p2', report: {hours: 1}});
+    assert.equal(result.months[0].retroMinutes, minutes); assert.equal(result.months[0].retroStudies, studies);
+    assert.deepEqual(operationCalls(m.calls), [['rpc', 'save_em_dia_own_annual_retro', {p_service_year: 2026, p_month: '2026-09',
+      p_minutes: minutes, p_studies: studies, p_expected_version: 1}]]);
+    assert(!m.calls.some(call => call.table));
+  }
+  const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_annual_retro: {data: annualRow({unchanged: true}), error: null}}});
+  assert((await Cloud.create({client: m.client}).saveOwnAnnualRetro({serviceYear: 2026, month: '2026-09', minutes: null, studies: null, expectedVersion: 0})).unchanged);
+});
+
+test('meta e retro recusam confirmação com outro valor, versão inesperada ou mês não editável', async () => {
+  for (const changes of [{target_minutes: 36000}, {version: 3}, {version: 0, unchanged: true}, {unchanged: undefined}]) {
+    const row = annualRow({target_minutes: 30000, version: 2, unchanged: false, ...changes});
+    const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_annual_goal: {data: row, error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).saveOwnAnnualGoal({serviceYear: 2026, targetMinutes: 30000, expectedVersion: 1}), error => error.code === 'invalid_response');
+  }
+  for (const changes of [{minutes: 31, retro_minutes: 31}, {studies: 2, retro_studies: 2}, {source: 'approved', can_edit_retro: false}]) {
+    const row = annualRetroRow(30, 1); row.months[0] = {...row.months[0], ...changes};
+    const m = mock({role: 'publisher', rpcResults: {save_em_dia_own_annual_retro: {data: row, error: null}}});
+    await assert.rejects(Cloud.create({client: m.client}).saveOwnAnnualRetro({serviceYear: 2026, month: '2026-09', minutes: 30, studies: 1, expectedVersion: 1}), error => error.code === 'invalid_response');
+  }
+});
+
+test('ano, meta, retroativos completos e versões são validados antes da rede', async () => {
+  const m = mock({role: 'publisher'}), api = Cloud.create({client: m.client});
+  for (const serviceYear of [1899, 2199, 2026.5, '2026', null, NaN]) await assert.rejects(api.readOwnAnnual(serviceYear), error => error.code === 'invalid_service_year');
+  for (const targetMinutes of [0, -1, 535681, 1.5, '30000', null]) await assert.rejects(api.saveOwnAnnualGoal({serviceYear: 2026, targetMinutes, expectedVersion: 0}), error => error.code === 'invalid_target');
+  for (const changes of [{month: '2026-08'}, {month: '2027-09'}, {minutes: -1}, {minutes: 44641}, {minutes: 1.5},
+    {minutes: null}, {studies: null}, {studies: -1}, {studies: 10000}, {studies: 1.5}, {minutes: undefined}, {expectedVersion: -1}]) {
+    await assert.rejects(api.saveOwnAnnualRetro({serviceYear: 2026, month: '2026-09', minutes: 60, studies: 1, expectedVersion: 0, ...changes}), Cloud.CloudError);
+  }
+  assert.equal(m.calls.length, 0);
+});
+
+test('somente publicador verificado acessa anual próprio, meta e retroativos', async () => {
+  for (const options of [{role: 'admin'}, {role: 'superintendent'}, {noSession: true}]) {
+    const m = mock(options), api = Cloud.create({client: m.client});
+    await assert.rejects(api.readOwnAnnual(2026), Cloud.CloudError);
+    await assert.rejects(api.saveOwnAnnualGoal({serviceYear: 2026, targetMinutes: 36000, expectedVersion: 0}), Cloud.CloudError);
+    await assert.rejects(api.saveOwnAnnualRetro({serviceYear: 2026, month: '2026-09', minutes: 60, studies: 1, expectedVersion: 0}), Cloud.CloudError);
+    assert.equal(operationCalls(m.calls).length, 0); assert(!m.calls.some(call => call.table));
+  }
+});
+
+test('falhas de leitura, meta e retro não repetem RPC nem retêm payload ou dados privados em erros', async () => {
+  const marker = 'PRIVATE_ANNUAL_FIXTURE';
+  for (const name of ['read_em_dia_own_annual', 'save_em_dia_own_annual_goal', 'save_em_dia_own_annual_retro']) {
+    for (const options of [{rpcThrow: Object.assign(Error(marker), {code: marker, request: {private_note: marker}})},
+      ...['40001', '42501', '22023'].map(code => ({rpcResults: {[name]: {data: null, error: {code, details: marker, message: marker}}}}))]) {
+      const m = mock({role: 'publisher', ...options}), api = Cloud.create({client: m.client});
+      const result = name === 'read_em_dia_own_annual' ? api.readOwnAnnual(2026) : name === 'save_em_dia_own_annual_goal'
+        ? api.saveOwnAnnualGoal({serviceYear: 2026, targetMinutes: 36000, expectedVersion: 0})
+        : api.saveOwnAnnualRetro({serviceYear: 2026, month: '2026-09', minutes: 60, studies: 1, expectedVersion: 0});
+      await assert.rejects(result, error => error instanceof Cloud.CloudError && !Object.hasOwn(error, 'cause') &&
+        !JSON.stringify(error).includes(marker) && !error.message.includes(marker));
+      assert.equal(operationCalls(m.calls).length, 1); assert(!m.calls.some(call => call.table));
+    }
+  }
+});

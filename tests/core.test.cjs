@@ -106,6 +106,81 @@ test('Meta rejeita totais incoerentes, acima de 744 horas e contagens fora do ca
     assert.throws(()=>C.regularMonthlyGoal({...goalInput,...patch}),/meta mensal/);
   }
 });
+
+const annualFixture=(changes={})=>{
+  const serviceYear=changes.serviceYear??2026,today=changes.today??'2026-11-06';
+  return {serviceYear,today,targetMinutes:36000,months:C.periodMonths(serviceYear,'service').map(month=>({month,kind:'regular',
+    source:month>today.slice(0,7)?'future':'missing',minutes:null,studies:null,retroMinutes:null,retroStudies:null,
+    canEditRetro:month<today.slice(0,7)})),...changes};
+};
+test('Ano de serviço começa em setembro e atravessa agosto do ano seguinte',()=>{
+  assert.equal(C.serviceYearForMonth('2026-09'),2026);assert.equal(C.serviceYearForMonth('2027-08'),2026);
+  assert.equal(C.serviceYearForMonth('2026-01'),2025);assert.equal(C.serviceYearForMonth('1900-01'),1899);
+  for(const month of ['2026-00','2026-13','2026-9',null,2026])assert.throws(()=>C.serviceYearForMonth(month),/Mês inválido/);
+});
+test('Anual usa uma única fonte por mês e soma somente regulares sem duplicar retroativos',()=>{
+  const bundle=annualFixture();
+  bundle.months[0]={...bundle.months[0],source:'approved',minutes:3000,studies:2,retroMinutes:2500,retroStudies:3,canEditRetro:false};
+  bundle.months[1]={...bundle.months[1],source:'diary',minutes:3300,retroMinutes:3000,retroStudies:4,canEditRetro:false};
+  const snapshot=C.clone(bundle),p=C.regularAnnualProgress(bundle);
+  assert.equal(p.recordedMinutes,6300);assert.equal(p.remainingMinutes,29700);assert.equal(p.percentage,17.5);
+  assert.equal(p.knownMonths,2);assert.equal(p.unknownMonths,1);assert.equal(p.studies,2);
+  assert.equal(p.knownStudyMonths,1);assert.equal(p.unknownStudyMonths,2);
+  assert.equal(p.monthsRemaining,10);assert.equal(p.monthlyMinutesNeeded,2970);assert.equal(p.closed,false);
+  assert.deepEqual(bundle,snapshot);
+});
+test('Anual preserva zero explícito, desconhecidos e exclui condições fora de regular inclusive após fim do cartão',()=>{
+  const bundle=annualFixture();
+  bundle.months[0]={...bundle.months[0],source:'retroactive',minutes:0,studies:0,retroMinutes:0,retroStudies:0};
+  bundle.months[1]={...bundle.months[1],source:'approved',minutes:null,studies:3,canEditRetro:false};
+  bundle.months[2]={...bundle.months[2],source:'not_regular'};
+  bundle.months[3].kind='auxiliary';
+  const p=C.regularAnnualProgress(bundle);
+  assert.equal(p.recordedMinutes,0);assert.equal(p.knownMonths,1);assert.equal(p.unknownMonths,1);
+  assert.equal(p.studies,3);assert.equal(p.knownStudyMonths,2);assert.equal(p.unknownStudyMonths,0);
+});
+test('Anual usa meta ajustada, preserva excesso e fecha sem exigir ritmo futuro',()=>{
+  const bundle=annualFixture({targetMinutes:3000});bundle.months[0]={...bundle.months[0],source:'approved',minutes:3600,studies:0,canEditRetro:false};
+  const p=C.regularAnnualProgress(bundle);assert.equal(p.excessMinutes,600);assert.equal(p.remainingMinutes,0);
+  assert.equal(p.percentage,120);assert.equal(p.barPercentage,100);assert.equal(p.monthlyMinutesNeeded,0);assert.equal(p.status,'achieved');
+  const closed=annualFixture({serviceYear:2025});assert.equal(C.regularAnnualProgress(closed).unknownMonths,12);
+  assert.equal(C.regularAnnualProgress(closed).status,'no_entries');assert.equal(C.regularAnnualProgress(closed).monthlyMinutesNeeded,null);
+  closed.months[0]={...closed.months[0],source:'approved',minutes:1,studies:0,canEditRetro:false};
+  assert.equal(C.regularAnnualProgress(closed).status,'closed_short');assert.equal(C.regularAnnualProgress(closed).monthsRemaining,0);
+});
+test('Anual inclui mês corrente no ritmo e não antecipa a meta por arredondamento',()=>{
+  const bundle=annualFixture({today:'2027-08-31'});bundle.months[0]={...bundle.months[0],source:'approved',minutes:35999,studies:0,canEditRetro:false};
+  const p=C.regularAnnualProgress(bundle);assert.equal(p.monthsRemaining,1);assert.equal(p.monthlyMinutesNeeded,1);assert.equal(p.percentage,99.9);
+  const max=annualFixture({targetMinutes:535680});max.months[0]={...max.months[0],source:'approved',minutes:44640,studies:9999,canEditRetro:false};
+  assert.equal(C.regularAnnualProgress(max).targetMinutes,535680);
+});
+test('Anual rejeita meses duplicados, futuros falsos, tipos e fontes incoerentes sem inventar valores',()=>{
+  const base=annualFixture();
+  for(const changes of [{serviceYear:2027},{serviceYear:'2026'},{serviceYear:1899},{targetMinutes:0},{targetMinutes:535681},
+    {targetMinutes:1.5},{today:'2026-02-30'},{months:base.months.slice(1)},{months:Array(12)}])assert.throws(()=>C.regularAnnualProgress({...base,...changes}),/meta anual/);
+  for(const changes of [{month:'2026-10'},{kind:'admin'},{source:'diary'},{source:'missing',minutes:0},
+    {source:'approved',kind:'publisher',canEditRetro:false},{source:'future',canEditRetro:false},
+    {retroMinutes:0},{studies:10000},{minutes:44641},{canEditRetro:false}]){
+    const bundle=annualFixture();bundle.months[0]={...bundle.months[0],...changes};assert.throws(()=>C.regularAnnualProgress(bundle),/meta anual/);
+  }
+});
+test('Texto de pioneiros usa horas e minutos completos e somente atividade escolhida',()=>{
+  const input={name:'  Pessoa fictícia  ',month:'2026-11',kind:'regular',participated:null,minutes:1815,studies:2,notes:'PRIVATE_FIXTURE',retroMinutes:1};
+  assert.equal(C.publisherReportText(input),'Prezado irmão, segue o meu relatório do mês de "Novembro de 2026"\n- Nome: Pessoa fictícia\n- Horas: 30:15h\n- Estudos: 2');
+  assert.match(C.publisherReportText({...input,kind:'auxiliary',minutes:0,studies:0}),/- Horas: 00:00h\n- Estudos: 0$/);
+  assert.doesNotMatch(C.publisherReportText(input),/PRIVATE_FIXTURE|retro/);
+});
+test('Texto do publicador comum usa participação e estudos sem campo de horas',()=>{
+  const input={name:'Pessoa fictícia',month:'2026-11',kind:'publisher',participated:true,minutes:null,studies:3};
+  assert.equal(C.publisherReportText(input),'Prezado irmão, segue o meu relatório do mês de "Novembro de 2026"\n- Nome: Pessoa fictícia\n- Participou no ministério?\nSim\n- Tem estudos bíblicos?\nSim, 3');
+  assert.match(C.publisherReportText({...input,participated:false,studies:0}),/\?\nNão\n- Tem estudos bíblicos\?\nNão$/);
+});
+test('Texto não compartilha dados incompletos, campos inválidos nem nomes com quebras de linha',()=>{
+  const input={name:'Pessoa fictícia',month:'2026-11',kind:'regular',participated:null,minutes:60,studies:0};
+  for(const changes of [{name:''},{name:'x'.repeat(161)},{name:'Fixture\nforged'}, {month:'2026-13'},{kind:'admin'},
+    {minutes:null},{minutes:44641},{minutes:1.5},{studies:null},{studies:-1},{studies:1.5},{participated:'true'},
+    {kind:'publisher',minutes:null},{kind:'publisher',participated:true,minutes:0}])assert.throws(()=>C.publisherReportText({...input,...changes}),/completos/);
+});
 test('Sem relatório é pendente',()=>assert.equal(C.status(null),'pending'));
 test('Recebimento incompleto',()=>assert.equal(C.status({...record(),participated:null,studies:null}),'review'));
 test('Não participou é relatório completo',()=>assert.equal(C.status({...record(),participated:false}),'complete'));
