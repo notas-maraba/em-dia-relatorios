@@ -701,7 +701,7 @@ test('confirmação de envio não pode trocar escopo, mês, soma ou versão de d
   }
 });
 
-test('envio recusado por mês aberto ou conflito de diário/relatório não faz repetição nem grava grupo', async () => {
+test('envio recusado pelo servidor ou conflito de diário/relatório não faz repetição nem grava grupo', async () => {
   for (const error of [{code: '22023'}, {code: '40001'}, {status: 401}]) {
     const m = mock({role: 'publisher', rpcResults: {submit_em_dia_own_hours: {data: null, error}}});
     await assert.rejects(Cloud.create({client: m.client}).submitOwnHours({month: '2026-11', participated: true, studies: 0,

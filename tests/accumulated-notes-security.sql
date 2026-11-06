@@ -259,7 +259,8 @@ begin
   perform set_config('request.jwt.claim.sub',v_publisher::text,true);
   set local role authenticated;
   v_result:=public.save_em_dia_own_hour_launch_note(v_a,v_today,1800,'PRIVATE_OPEN_NOTE',0);
-  perform pg_temp.expect_note_error(format('select public.submit_em_dia_own_hours(%L,true,0,1,0)',v_open),'22023');
+  v_result:=public.submit_em_dia_own_hours(v_open,true,0,1,0);
+  assert v_result->>'status'='accepted' and (v_result->>'total_minutes')::integer=1800;
   v_snapshot:=public.read_em_dia_own_hour_launches(v_month);
   reset role;
 

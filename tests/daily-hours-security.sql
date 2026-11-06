@@ -167,13 +167,14 @@ begin
   assert public.read_em_dia_own_card()#>array['state','reports',v_month,'daily_regular','hours']='1.50'::jsonb;
   v_result:=public.submit_em_dia_own_hours(v_month,true,2,5,1);
   assert v_result->'unchanged'='true'::jsonb and (v_result->>'version')::bigint=2;
-  -- A current-month draft can be saved; neither diary nor manual pioneer
-  -- submission may close that month early.
+  -- A current-month draft can be submitted without closing the month. The
+  -- identical manual total is a safe retry of that same received report.
   v_result:=public.save_em_dia_own_hours(v_today,0,0);
   assert (v_result->>'version')::bigint=1 and v_result->'closed'='false'::jsonb;
-  perform pg_temp.expect_daily_error(format('select public.submit_em_dia_own_hours(%L,null,null,1,0)',v_open),'22023');
-  perform pg_temp.expect_daily_error(format('select public.submit_em_dia_own_report(%L,%L::jsonb,0)',v_open,
-    '{"participated":null,"hours":0,"studies":null}'),'22023');
+  v_result:=public.submit_em_dia_own_hours(v_open,null,null,1,0);
+  assert v_result->>'status'='accepted' and (v_result->>'version')::bigint=1;
+  v_result:=public.submit_em_dia_own_report(v_open,'{"participated":null,"hours":0,"studies":null}'::jsonb,0);
+  assert v_result->'unchanged'='true'::jsonb and (v_result->>'version')::bigint=1;
   reset role;
 
   -- Managers can decide on submitted monthly totals, not read the private days.
